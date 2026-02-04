@@ -22,27 +22,38 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-// Package iosbridge provides gomobile-compatible bindings for trzsz-ssh.
+// Package iosbridge provides gomobile-compatible KCP/QUIC transport bindings.
 //
-// This package wraps the internal tssh package to provide a simple API
-// that can be used from iOS/Swift via gomobile bindings. It handles:
+// This package provides TRANSPORT-ONLY functionality for connecting to tsshd
+// servers. It does NOT handle SSH authentication - that is handled by the
+// Swift side using Citadel or NIOSSH.
 //
-//   - Connection management (TCP, UDP/KCP, QUIC)
-//   - Authentication (password, public key)
-//   - PTY allocation and terminal resize
-//   - I/O via callbacks (since io.Reader/Writer aren't gomobile-compatible)
+// Architecture:
+//   1. Swift side: SSH connection via Citadel, spawn tsshd, parse JSON output
+//   2. Go side: KCP/QUIC transport to tsshd using parsed server info
+//
+// This separation ensures SSH keys never touch the Go layer.
 //
 // Example usage from Swift:
 //
-//	let args = TrzszSSHNewTSSHArgs()!
-//	args.destination = "user@host.example.com"
-//	args.port = 22
-//	args.kcp = true  // Use KCP transport
+//	// After SSH spawns tsshd and returns JSON like:
+//	// {"Port":61001,"Mode":"KCP","Pass":"<hex>","Salt":"<hex>",...}
 //
-//	let client = try TrzszSSHConnectWithPassword(args, "password")
-//	let session = try client.newSession()
+//	// Parse the server info
+//	let config = try IosbridgeParseTransportConfig(jsonString)
+//	config.host = serverIP
+//
+//	// Connect transport (no SSH involved)
+//	let transport = try IosbridgeConnectTransport(config)
+//	let session = try transport.newSession()
 //
 //	try session.requestPty("xterm-256color", 24, 80)
 //	session.setOutputCallback(myOutputHandler)
 //	try session.shell()
+//
+// The transport provides:
+//   - KCP and QUIC protocol support
+//   - Automatic reconnection on network changes
+//   - PTY allocation and terminal resize
+//   - I/O via callbacks (since io.Reader/Writer aren't gomobile-compatible)
 package iosbridge
