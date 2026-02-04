@@ -92,7 +92,6 @@ func NewTransportConfig() *TransportConfig {
 // SetKcpCredentials sets the KCP password and salt.
 // Use this method instead of setting properties directly due to gomobile binding issues.
 func (c *TransportConfig) SetKcpCredentials(pass, salt string) {
-	fmt.Printf("[iosbridge] SetKcpCredentials called - pass len=%d, salt len=%d\n", len(pass), len(salt))
 	c.KcpPass = pass
 	c.KcpSalt = salt
 }
@@ -152,10 +151,6 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 
 // Validate checks if the TransportConfig has required fields.
 func (c *TransportConfig) Validate() string {
-	fmt.Printf("[iosbridge] Validate() - Host=%s, Port=%d, Mode=%s\n", c.Host, c.Port, c.Mode)
-	fmt.Printf("[iosbridge] Validate() - KcpPass='%s' (len=%d)\n", c.KcpPass, len(c.KcpPass))
-	fmt.Printf("[iosbridge] Validate() - KcpSalt='%s' (len=%d)\n", c.KcpSalt, len(c.KcpSalt))
-
 	if c.Host == "" {
 		return "host is required"
 	}
@@ -167,7 +162,6 @@ func (c *TransportConfig) Validate() string {
 	}
 	if c.Mode == "KCP" {
 		if c.KcpPass == "" || c.KcpSalt == "" {
-			fmt.Printf("[iosbridge] Validate() - KCP FAIL: Pass empty=%v, Salt empty=%v\n", c.KcpPass == "", c.KcpSalt == "")
 			return "KCP mode requires Pass and Salt"
 		}
 	}
@@ -240,10 +234,6 @@ func (n *noOpTransportStateCallback) OnError(message string)     {}
 // config contains the connection parameters from tsshd JSON output.
 // Returns a Transport that can create sessions.
 func ConnectTransport(config *TransportConfig) (*Transport, error) {
-	// Debug logging to diagnose gomobile binding issues
-	fmt.Printf("[iosbridge] ConnectTransport called - Mode=%s, Host=%s, Port=%d\n", config.Mode, config.Host, config.Port)
-	fmt.Printf("[iosbridge] KcpPass length=%d, KcpSalt length=%d\n", len(config.KcpPass), len(config.KcpSalt))
-
 	if err := config.Validate(); err != "" {
 		return nil, fmt.Errorf("invalid config: %s", err)
 	}
