@@ -519,10 +519,17 @@ func (s *TransportSession) forwardOutput() {
 		}
 
 		if err != nil {
-			if err != io.EOF {
-				s.mu.Lock()
-				callback := s.callback
-				s.mu.Unlock()
+			s.mu.Lock()
+			callback := s.callback
+			s.mu.Unlock()
+
+			if err == io.EOF {
+				// Graceful end of output - wait for session to get exit code
+				_ = s.session.Wait()
+				exitCode := s.session.GetExitCode()
+				callback.OnExit(exitCode)
+			} else {
+				// Error during read
 				callback.OnError(fmt.Sprintf("read error: %v", err))
 			}
 			return

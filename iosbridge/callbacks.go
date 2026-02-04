@@ -38,14 +38,21 @@ type TSSHOutputCallback interface {
 	// This includes connection errors and transport issues.
 	OnError(message string)
 
-	// OnClose is called when the session has ended.
-	// After this callback, no more OnOutput or OnError calls will be made.
+	// OnExit is called when the remote shell/command has exited.
+	// exitCode is the exit status: 0 for success, non-zero for error.
+	// This is called for graceful exits (e.g., user types "exit").
+	OnExit(exitCode int)
+
+	// OnClose is called when the session has been closed.
+	// After this callback, no more OnOutput, OnError, or OnExit calls will be made.
+	// This may be called after OnExit, or alone if the connection was lost.
 	OnClose()
 }
 
 // noOpOutputCallback is a no-op implementation of TSSHOutputCallback.
 type noOpOutputCallback struct{}
 
-func (n *noOpOutputCallback) OnOutput(data []byte)  {}
+func (n *noOpOutputCallback) OnOutput(data []byte)   {}
 func (n *noOpOutputCallback) OnError(message string) {}
+func (n *noOpOutputCallback) OnExit(exitCode int)    {}
 func (n *noOpOutputCallback) OnClose()               {}
