@@ -76,6 +76,10 @@ type TransportConfig struct {
 	AliveTimeoutSec     int
 	HeartbeatTimeoutSec int
 
+	// InitialSerialNumber seeds the roaming auth serial for resume across app termination.
+	// If zero, default behavior is unchanged.
+	InitialSerialNumber int64
+
 	// Debug enables verbose logging
 	Debug bool
 }
@@ -280,6 +284,9 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 			// We don't buffer local input in the bridge, so discardedInput can be ignored.
 		},
 	}
+	if config.InitialSerialNumber > 0 {
+		opts.InitialSerialNumber = uint64(config.InitialSerialNumber)
+	}
 
 	if config.Debug {
 		opts.DebugFunc = func(msec int64, msg string) {
@@ -438,6 +445,18 @@ type TransportSession struct {
 
 	// Track last send time for stuck stream detection
 	lastSendTime atomic.Int64
+}
+
+// Setenv sets an environment variable for the session.
+// Must be called before Shell() or Start().
+func (s *TransportSession) Setenv(name, value string) error {
+	if s.closed.Load() {
+		return fmt.Errorf("session is closed")
+	}
+	if s.started.Load() {
+		return fmt.Errorf("session already started")
+	}
+	return s.session.Setenv(name, value)
 }
 
 // RequestPty requests a pseudo-terminal.
