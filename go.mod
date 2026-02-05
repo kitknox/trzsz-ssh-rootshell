@@ -32,6 +32,11 @@ require (
 	github.com/trzsz/trzsz-go v1.2.0
 	github.com/trzsz/tsshd v0.1.7-0.20260125135324-348ee5b4ec22
 	golang.org/x/crypto v0.47.0
+)
+
+replace github.com/trzsz/tsshd => /Users/kit/Development/tsshd
+
+require (
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0

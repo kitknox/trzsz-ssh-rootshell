@@ -206,6 +206,9 @@ type Transport struct {
 
 	// Callback for state changes
 	stateCallback TransportStateCallback
+
+	// Pending discard marker to clear server-side pending input discard state.
+	pendingDiscardMarker []byte
 }
 
 // TransportStateCallback receives transport state changes.
@@ -238,6 +241,11 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		return nil, fmt.Errorf("invalid config: %s", err)
 	}
 
+	transport := &Transport{
+		config:        config,
+		stateCallback: &noOpTransportStateCallback{},
+	}
+
 	serverInfo := config.toServerInfo()
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 
@@ -265,15 +273,21 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		IntervalTime:     intervalTime,
 		ConnectTimeout:   connectTimeout,
 		HeartbeatTimeout: heartbeatTimeout,
+		DiscardCallback: func(discardMarker, discardedInput []byte) {
+			if len(discardMarker) > 0 {
+				transport.enqueueDiscardMarker(discardMarker)
+			}
+			// We don't buffer local input in the bridge, so discardedInput can be ignored.
+		},
 	}
 
 	if config.Debug {
 		opts.DebugFunc = func(msec int64, msg string) {
-			fmt.Printf("[%d] %s\n", msec, msg)
+			fmt.Printf("[tsshd %d] %s\n", msec, msg)
 		}
-		opts.WarningFunc = func(msg string) {
-			fmt.Printf("[WARN] %s\n", msg)
-		}
+	}
+	opts.WarningFunc = func(msg string) {
+		fmt.Printf("[tsshd WARN] %s\n", msg)
 	}
 
 	client, err := tsshd.NewSshUdpClient(opts)
@@ -281,11 +295,8 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		return nil, fmt.Errorf("failed to connect transport: %w", err)
 	}
 
-	return &Transport{
-		client:        client,
-		config:        config,
-		stateCallback: &noOpTransportStateCallback{},
-	}, nil
+	transport.client = client
+	return transport, nil
 }
 
 // SetStateCallback sets the callback for transport state changes.
@@ -329,6 +340,34 @@ func (t *Transport) NewSession() (*TransportSession, error) {
 	return ts, nil
 }
 
+func (t *Transport) enqueueDiscardMarker(marker []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// If we have an active session with stdin, write immediately.
+	if t.session != nil && t.session.stdin != nil && t.session.started.Load() && !t.session.closed.Load() {
+		_, _ = t.session.stdin.Write(marker)
+		return
+	}
+
+	// Otherwise store it to send once the session starts.
+	t.pendingDiscardMarker = append([]byte(nil), marker...)
+}
+
+func (t *Transport) flushPendingDiscardMarker() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.pendingDiscardMarker) == 0 {
+		return
+	}
+	if t.session == nil || t.session.stdin == nil || !t.session.started.Load() || t.session.closed.Load() {
+		return
+	}
+	_, _ = t.session.stdin.Write(t.pendingDiscardMarker)
+	t.pendingDiscardMarker = nil
+}
+
 // Close closes the transport connection.
 func (t *Transport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
@@ -359,6 +398,28 @@ func (t *Transport) GetLastActiveTime() int64 {
 	return t.client.GetLastActiveTime()
 }
 
+// IsTimeout returns true if the transport is currently in a timeout state
+// (i.e., no activity for longer than the heartbeat timeout).
+func (t *Transport) IsTimeout() bool {
+	lastActive := t.client.GetLastActiveTime()
+	if lastActive <= 0 {
+		return false
+	}
+	// Use heartbeat timeout from config (default 3 seconds)
+	heartbeatMs := int64(t.config.HeartbeatTimeoutSec * 1000)
+	if heartbeatMs <= 0 {
+		heartbeatMs = 3000
+	}
+	now := time.Now().UnixMilli()
+	return (now - lastActive) > heartbeatMs
+}
+
+// GetLastReconnectError returns the last error encountered during reconnection.
+// Returns nil if no reconnection error occurred.
+func (t *Transport) GetLastReconnectError() error {
+	return t.client.GetLastReconnectError()
+}
+
 // TransportSession represents a shell session over the transport.
 type TransportSession struct {
 	session   *tsshd.SshUdpSession
@@ -374,6 +435,9 @@ type TransportSession struct {
 
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+
+	// Track last send time for stuck stream detection
+	lastSendTime atomic.Int64
 }
 
 // RequestPty requests a pseudo-terminal.
@@ -412,6 +476,7 @@ func (s *TransportSession) Shell() error {
 	}
 
 	s.startOutputForwarding()
+	s.transport.flushPendingDiscardMarker()
 	return nil
 }
 
@@ -426,6 +491,9 @@ func (s *TransportSession) Write(data []byte) error {
 	if s.stdin == nil {
 		return fmt.Errorf("stdin not available")
 	}
+
+	// Track when we last sent data for stuck stream detection
+	s.lastSendTime.Store(time.Now().UnixMilli())
 
 	_, err := s.stdin.Write(data)
 	return err
