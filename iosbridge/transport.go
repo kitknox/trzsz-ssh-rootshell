@@ -277,6 +277,9 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		IntervalTime:     intervalTime,
 		ConnectTimeout:   connectTimeout,
 		HeartbeatTimeout: heartbeatTimeout,
+		// Use in-process pipes instead of UDP sockets.
+		// Required for iOS where UDP sockets die when the app backgrounds.
+		UseInProcessPipe: true,
 		DiscardCallback: func(discardMarker, discardedInput []byte) {
 			if len(discardMarker) > 0 {
 				transport.enqueueDiscardMarker(discardMarker)
