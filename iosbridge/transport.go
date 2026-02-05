@@ -500,6 +500,7 @@ func (s *TransportSession) Shell() error {
 }
 
 // Write sends input to the shell.
+// Thread-safe: uses mutex to prevent interleaving with WindowChange.
 func (s *TransportSession) Write(data []byte) error {
 	if s.closed.Load() {
 		return fmt.Errorf("session is closed")
@@ -514,15 +515,21 @@ func (s *TransportSession) Write(data []byte) error {
 	// Track when we last sent data for stuck stream detection
 	s.lastSendTime.Store(time.Now().UnixMilli())
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err := s.stdin.Write(data)
 	return err
 }
 
 // WindowChange notifies the remote host of a terminal size change.
+// Thread-safe: uses mutex to prevent interleaving with Write.
 func (s *TransportSession) WindowChange(rows, cols int) error {
 	if s.closed.Load() {
 		return fmt.Errorf("session is closed")
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.session.WindowChange(rows, cols)
 }
 
