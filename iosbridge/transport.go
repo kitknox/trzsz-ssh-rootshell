@@ -592,9 +592,104 @@ func (s *TransportSession) startOutputForwarding() {
 	}
 }
 
+// discardMarkerMagic is the 4-byte prefix of discard markers (0xFF 0xC0 0xC1 0xFF).
+// 0xFF is never valid UTF-8, so this cannot appear in legitimate terminal output.
+var discardMarkerMagic = []byte{0xFF, 0xC0, 0xC1, 0xFF}
+
+const discardMarkerLen = 8 // 4 magic + 4 index bytes
+
+// discardMarkerFilter strips discard marker bytes from output data.
+// Handles markers that span across read boundaries using a holdback buffer.
+type discardMarkerFilter struct {
+	partial []byte // buffered bytes that might be part of a marker
+}
+
+// filter removes any discard markers from data, returning clean output.
+func (f *discardMarkerFilter) filter(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+
+	// Prepend any partial data from previous call
+	if len(f.partial) > 0 {
+		data = append(f.partial, data...)
+		f.partial = nil
+	}
+
+	// Fast path: no 0xFF byte means no possible marker
+	hasMagic := false
+	for _, b := range data {
+		if b == 0xFF {
+			hasMagic = true
+			break
+		}
+	}
+	if !hasMagic {
+		return data
+	}
+
+	result := make([]byte, 0, len(data))
+	i := 0
+	for i < len(data) {
+		if data[i] != 0xFF {
+			result = append(result, data[i])
+			i++
+			continue
+		}
+
+		remaining := len(data) - i
+		if remaining < discardMarkerLen {
+			// Could be a partial marker at end of buffer - hold it back
+			if remaining >= 4 && data[i] == discardMarkerMagic[0] &&
+				data[i+1] == discardMarkerMagic[1] &&
+				data[i+2] == discardMarkerMagic[2] &&
+				data[i+3] == discardMarkerMagic[3] {
+				// Confirmed magic prefix but incomplete marker - hold back
+				f.partial = append([]byte(nil), data[i:]...)
+				return result
+			}
+			if remaining < 4 {
+				// Could be start of magic prefix - check partial match
+				match := true
+				for j := 0; j < remaining; j++ {
+					if data[i+j] != discardMarkerMagic[j] {
+						match = false
+						break
+					}
+				}
+				if match {
+					f.partial = append([]byte(nil), data[i:]...)
+					return result
+				}
+			}
+			// Not a marker prefix, pass through
+			result = append(result, data[i])
+			i++
+			continue
+		}
+
+		// Full marker check
+		if data[i] == discardMarkerMagic[0] &&
+			data[i+1] == discardMarkerMagic[1] &&
+			data[i+2] == discardMarkerMagic[2] &&
+			data[i+3] == discardMarkerMagic[3] {
+			// Full marker found - skip it entirely
+			i += discardMarkerLen
+			continue
+		}
+
+		// 0xFF but not a marker, pass through
+		result = append(result, data[i])
+		i++
+	}
+
+	return result
+}
+
 func (s *TransportSession) forwardOutput() {
 	defer s.wg.Done()
 
+	filter := &discardMarkerFilter{}
 	buf := make([]byte, 32*1024)
 	for {
 		select {
@@ -605,14 +700,17 @@ func (s *TransportSession) forwardOutput() {
 
 		n, err := s.stdout.Read(buf)
 		if n > 0 {
-			data := make([]byte, n)
-			copy(data, buf[:n])
+			filtered := filter.filter(buf[:n])
+			if len(filtered) > 0 {
+				data := make([]byte, len(filtered))
+				copy(data, filtered)
 
-			s.mu.Lock()
-			callback := s.callback
-			s.mu.Unlock()
+				s.mu.Lock()
+				callback := s.callback
+				s.mu.Unlock()
 
-			callback.OnOutput(data)
+				callback.OnOutput(data)
+			}
 		}
 
 		if err != nil {
