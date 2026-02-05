@@ -281,10 +281,11 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		// Required for iOS where UDP sockets die when the app backgrounds.
 		UseInProcessPipe: true,
 		DiscardCallback: func(discardMarker, discardedInput []byte) {
-			if len(discardMarker) > 0 {
-				transport.enqueueDiscardMarker(discardMarker)
-			}
-			// We don't buffer local input in the bridge, so discardedInput can be ignored.
+			// [iOS] No-op: discard markers are disabled server-side. There is no
+			// input to discard when resuming from background (keyboard dismissed).
+			// if len(discardMarker) > 0 {
+			// 	transport.enqueueDiscardMarker(discardMarker)
+			// }
 		},
 	}
 	if config.InitialSerialNumber > 0 {
@@ -596,12 +597,35 @@ func (s *TransportSession) startOutputForwarding() {
 // 0xFF is never valid UTF-8, so this cannot appear in legitimate terminal output.
 var discardMarkerMagic = []byte{0xFF, 0xC0, 0xC1, 0xFF}
 
-const discardMarkerLen = 8 // 4 magic + 4 index bytes
-
 // discardMarkerFilter strips discard marker bytes from output data.
+// Handles both raw markers (8 bytes) and ECHOCTL-expanded echoes (up to 12 bytes)
+// where control chars in the index are expanded to ^X sequences.
 // Handles markers that span across read boundaries using a holdback buffer.
 type discardMarkerFilter struct {
 	partial []byte // buffered bytes that might be part of a marker
+}
+
+// consumeMarkerIndex consumes 4 logical index bytes from data[pos:], accounting for
+// ECHOCTL expansion where control chars (0x00-0x1F, 0x7F) are echoed as 2-byte ^X pairs.
+// Returns the number of raw bytes consumed, or -1 if not enough data.
+func consumeMarkerIndex(data []byte, pos int) int {
+	consumed := 0
+	for logicalBytes := 0; logicalBytes < 4; logicalBytes++ {
+		if pos+consumed >= len(data) {
+			return -1 // not enough data
+		}
+		b := data[pos+consumed]
+		if b == 0x5E && pos+consumed+1 < len(data) {
+			// Could be ECHOCTL expansion: ^@ through ^_ (0x5E 0x40-0x5F) or ^? (0x5E 0x3F)
+			next := data[pos+consumed+1]
+			if next >= 0x3F && next <= 0x5F {
+				consumed += 2 // ECHOCTL pair
+				continue
+			}
+		}
+		consumed++ // raw byte
+	}
+	return consumed
 }
 
 // filter removes any discard markers from data, returning clean output.
@@ -638,29 +662,19 @@ func (f *discardMarkerFilter) filter(data []byte) []byte {
 		}
 
 		remaining := len(data) - i
-		if remaining < discardMarkerLen {
-			// Could be a partial marker at end of buffer - hold it back
-			if remaining >= 4 && data[i] == discardMarkerMagic[0] &&
-				data[i+1] == discardMarkerMagic[1] &&
-				data[i+2] == discardMarkerMagic[2] &&
-				data[i+3] == discardMarkerMagic[3] {
-				// Confirmed magic prefix but incomplete marker - hold back
+
+		// Check for partial magic prefix at end of buffer
+		if remaining < 4 {
+			match := true
+			for j := 0; j < remaining; j++ {
+				if data[i+j] != discardMarkerMagic[j] {
+					match = false
+					break
+				}
+			}
+			if match {
 				f.partial = append([]byte(nil), data[i:]...)
 				return result
-			}
-			if remaining < 4 {
-				// Could be start of magic prefix - check partial match
-				match := true
-				for j := 0; j < remaining; j++ {
-					if data[i+j] != discardMarkerMagic[j] {
-						match = false
-						break
-					}
-				}
-				if match {
-					f.partial = append([]byte(nil), data[i:]...)
-					return result
-				}
 			}
 			// Not a marker prefix, pass through
 			result = append(result, data[i])
@@ -668,19 +682,27 @@ func (f *discardMarkerFilter) filter(data []byte) []byte {
 			continue
 		}
 
-		// Full marker check
-		if data[i] == discardMarkerMagic[0] &&
-			data[i+1] == discardMarkerMagic[1] &&
-			data[i+2] == discardMarkerMagic[2] &&
-			data[i+3] == discardMarkerMagic[3] {
-			// Full marker found - skip it entirely
-			i += discardMarkerLen
+		// Check for magic prefix
+		if data[i] != discardMarkerMagic[0] ||
+			data[i+1] != discardMarkerMagic[1] ||
+			data[i+2] != discardMarkerMagic[2] ||
+			data[i+3] != discardMarkerMagic[3] {
+			// 0xFF but not a marker, pass through
+			result = append(result, data[i])
+			i++
 			continue
 		}
 
-		// 0xFF but not a marker, pass through
-		result = append(result, data[i])
-		i++
+		// Magic prefix confirmed. Try to consume 4 logical index bytes.
+		indexBytes := consumeMarkerIndex(data, i+4)
+		if indexBytes < 0 {
+			// Not enough data to determine full marker - hold back
+			f.partial = append([]byte(nil), data[i:]...)
+			return result
+		}
+
+		// Full marker (with possible ECHOCTL expansion) - skip it entirely
+		i += 4 + indexBytes
 	}
 
 	return result
@@ -689,7 +711,10 @@ func (f *discardMarkerFilter) filter(data []byte) []byte {
 func (s *TransportSession) forwardOutput() {
 	defer s.wg.Done()
 
-	filter := &discardMarkerFilter{}
+	// [iOS] Output filter disabled: discard markers are disabled server-side,
+	// so no marker echoes to strip.
+	// filter := &discardMarkerFilter{}
+
 	buf := make([]byte, 32*1024)
 	for {
 		select {
@@ -700,17 +725,16 @@ func (s *TransportSession) forwardOutput() {
 
 		n, err := s.stdout.Read(buf)
 		if n > 0 {
-			filtered := filter.filter(buf[:n])
-			if len(filtered) > 0 {
-				data := make([]byte, len(filtered))
-				copy(data, filtered)
+			// [iOS] Filter disabled:
+			// filtered := filter.filter(buf[:n])
+			data := make([]byte, n)
+			copy(data, buf[:n])
 
-				s.mu.Lock()
-				callback := s.callback
-				s.mu.Unlock()
+			s.mu.Lock()
+			callback := s.callback
+			s.mu.Unlock()
 
-				callback.OnOutput(data)
-			}
+			callback.OnOutput(data)
 		}
 
 		if err != nil {
