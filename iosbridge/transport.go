@@ -25,15 +25,48 @@ SOFTWARE.
 package iosbridge
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/trzsz/tsshd/tsshd"
 )
+
+// debugLogFile is the file handle for debug logging (nil = disabled).
+var debugLogFile *os.File
+var debugLogMu sync.Mutex
+
+// SetDebugLogPath enables debug logging to a file in the app's Documents directory.
+// Pass empty string to disable. Call before ConnectTransport.
+func SetDebugLogPath(path string) {
+	debugLogMu.Lock()
+	defer debugLogMu.Unlock()
+	if debugLogFile != nil {
+		_ = debugLogFile.Close()
+		debugLogFile = nil
+	}
+	if path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			debugLogFile = f
+		}
+	}
+}
+
+func debugLog(format string, args ...any) {
+	debugLogMu.Lock()
+	defer debugLogMu.Unlock()
+	if debugLogFile == nil {
+		return
+	}
+	msg := fmt.Sprintf("%s [iosbridge] %s\n", time.Now().Format("15:04:05.000"), fmt.Sprintf(format, args...))
+	_, _ = debugLogFile.WriteString(msg)
+}
 
 // TransportConfig holds connection parameters for the UDP transport.
 // These values come from the tsshd JSON output after SSH spawn.
@@ -213,6 +246,14 @@ type Transport struct {
 
 	// Pending discard marker to clear server-side pending input discard state.
 	pendingDiscardMarker []byte
+
+	// Last sent discard marker, used to deduplicate. The server has a race
+	// condition where enablePendingInputDiscard() spawns goroutines that
+	// capture discardPendingInputMarker by reference, causing the same marker
+	// to be sent via bus multiple times. Without deduplication, the server
+	// finds the first copy, clears the flag, and the second copy passes
+	// through to the shell as garbage characters.
+	lastSentMarker []byte
 }
 
 // TransportStateCallback receives transport state changes.
@@ -281,24 +322,27 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		// Required for iOS where UDP sockets die when the app backgrounds.
 		UseInProcessPipe: true,
 		DiscardCallback: func(discardMarker, discardedInput []byte) {
-			// [iOS] No-op: discard markers are disabled server-side. There is no
-			// input to discard when resuming from background (keyboard dismissed).
-			// if len(discardMarker) > 0 {
-			// 	transport.enqueueDiscardMarker(discardMarker)
-			// }
+			debugLog("DiscardCallback: marker=%d bytes, discarded=%d bytes", len(discardMarker), len(discardedInput))
+			// Send the marker back through the session stdin so the server's
+			// discardPendingInput() finds it and clears discardPendingInputFlag.
+			// Without this, the server discards ALL input forever after reconnect.
+			// Any marker bytes that leak into output are stripped by discardMarkerFilter.
+			if len(discardMarker) > 0 {
+				transport.enqueueDiscardMarker(discardMarker)
+			}
 		},
 	}
 	if config.InitialSerialNumber > 0 {
 		opts.InitialSerialNumber = uint64(config.InitialSerialNumber)
 	}
 
-	if config.Debug {
-		opts.DebugFunc = func(msec int64, msg string) {
-			fmt.Printf("[tsshd %d] %s\n", msec, msg)
-		}
+	// Always route tsshd debug/warning to our file log
+	opts.EnableDebugging = true
+	opts.DebugFunc = func(msec int64, msg string) {
+		debugLog("[tsshd] %s", msg)
 	}
 	opts.WarningFunc = func(msg string) {
-		fmt.Printf("[tsshd WARN] %s\n", msg)
+		debugLog("[tsshd WARN] %s", msg)
 	}
 
 	client, err := tsshd.NewSshUdpClient(opts)
@@ -355,8 +399,17 @@ func (t *Transport) enqueueDiscardMarker(marker []byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Deduplicate: the server may send the same marker multiple times due to
+	// a race condition in enablePendingInputDiscard() goroutines.
+	if bytes.Equal(t.lastSentMarker, marker) {
+		debugLog("enqueueDiscardMarker: ignoring duplicate marker")
+		return
+	}
+	t.lastSentMarker = append([]byte(nil), marker...)
+
 	// If we have an active session with stdin, write immediately.
 	if t.session != nil && t.session.stdin != nil && t.session.started.Load() && !t.session.closed.Load() {
+		debugLog("enqueueDiscardMarker: writing %d bytes to stdin", len(marker))
 		_, _ = t.session.stdin.Write(marker)
 		return
 	}
@@ -507,21 +560,31 @@ func (s *TransportSession) Shell() error {
 // Thread-safe: uses mutex to prevent interleaving with WindowChange.
 func (s *TransportSession) Write(data []byte) error {
 	if s.closed.Load() {
+		debugLog("Write: session closed")
 		return fmt.Errorf("session is closed")
 	}
 	if !s.started.Load() {
+		debugLog("Write: session not started")
 		return fmt.Errorf("session not started")
 	}
 	if s.stdin == nil {
+		debugLog("Write: stdin nil")
 		return fmt.Errorf("stdin not available")
 	}
 
 	// Track when we last sent data for stuck stream detection
 	s.lastSendTime.Store(time.Now().UnixMilli())
 
+	debugLog("Write: %d bytes, acquiring lock", len(data))
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	debugLog("Write: lock acquired, writing to stdin pipe")
 	_, err := s.stdin.Write(data)
+	if err != nil {
+		debugLog("Write: stdin.Write error: %v", err)
+	} else {
+		debugLog("Write: stdin.Write OK")
+	}
 	return err
 }
 
@@ -710,34 +773,44 @@ func (f *discardMarkerFilter) filter(data []byte) []byte {
 
 func (s *TransportSession) forwardOutput() {
 	defer s.wg.Done()
+	debugLog("forwardOutput: started")
 
-	// [iOS] Output filter disabled: discard markers are disabled server-side,
-	// so no marker echoes to strip.
-	// filter := &discardMarkerFilter{}
+	// Strip discard marker bytes (0xFF 0xC0 0xC1 0xFF + 4 index bytes) from output.
+	// These can leak through when the server sends multiple markers due to race
+	// conditions in enablePendingInputDiscard() goroutines. The first marker is
+	// consumed by discardPendingInput(), but extras pass through to the shell
+	// and echo back as garbage characters.
+	filter := &discardMarkerFilter{}
 
 	buf := make([]byte, 32*1024)
 	for {
 		select {
 		case <-s.stopChan:
+			debugLog("forwardOutput: stopChan signaled, exiting")
 			return
 		default:
 		}
 
 		n, err := s.stdout.Read(buf)
 		if n > 0 {
-			// [iOS] Filter disabled:
-			// filtered := filter.filter(buf[:n])
-			data := make([]byte, n)
-			copy(data, buf[:n])
+			debugLog("forwardOutput: read %d bytes from stdout pipe", n)
+			filtered := filter.filter(buf[:n])
+			if len(filtered) == 0 {
+				debugLog("forwardOutput: all %d bytes were marker data, skipping", n)
+			} else {
+				data := make([]byte, len(filtered))
+				copy(data, filtered)
 
-			s.mu.Lock()
-			callback := s.callback
-			s.mu.Unlock()
+				s.mu.Lock()
+				callback := s.callback
+				s.mu.Unlock()
 
-			callback.OnOutput(data)
+				callback.OnOutput(data)
+			}
 		}
 
 		if err != nil {
+			debugLog("forwardOutput: stdout.Read error: %v", err)
 			s.mu.Lock()
 			callback := s.callback
 			s.mu.Unlock()
