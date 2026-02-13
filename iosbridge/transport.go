@@ -36,6 +36,36 @@ import (
 	"github.com/trzsz/tsshd/tsshd"
 )
 
+// ROOTSHELL: DebugLogger allows the host app (Swift) to receive tsshd debug and warning
+// messages for file-based logging. Set via SetDebugLogger() before ConnectTransport().
+// When set, debug logging is always enabled regardless of TransportConfig.Debug.
+
+// DebugLogger receives debug and warning messages from the transport layer.
+type DebugLogger interface {
+	// OnDebug is called for debug messages. Called from background goroutines.
+	OnDebug(msg string)
+}
+
+// globalDebugLogger is the package-level debug logger set by the host app.
+var globalDebugLogger struct {
+	sync.RWMutex
+	logger DebugLogger
+}
+
+// SetDebugLogger sets a global debug logger for all transports.
+// Call this before ConnectTransport(). Pass nil to disable.
+func SetDebugLogger(logger DebugLogger) {
+	globalDebugLogger.Lock()
+	defer globalDebugLogger.Unlock()
+	globalDebugLogger.logger = logger
+}
+
+func getDebugLogger() DebugLogger {
+	globalDebugLogger.RLock()
+	defer globalDebugLogger.RUnlock()
+	return globalDebugLogger.logger
+}
+
 // TransportConfig holds connection parameters for the UDP transport.
 // These values come from the tsshd JSON output after SSH spawn.
 //
@@ -303,13 +333,27 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		opts.InitialSerialNumber = uint64(config.InitialSerialNumber)
 	}
 
-	if config.Debug {
+	// ROOTSHELL: Route debug/warning output through the global DebugLogger when set,
+	// enabling file-based logging on iOS where stdout goes nowhere.
+	if dl := getDebugLogger(); dl != nil {
+		opts.EnableDebugging = true
+		opts.DebugFunc = func(msec int64, msg string) {
+			dl.OnDebug(fmt.Sprintf("[tsshd %d] %s", msec, msg))
+		}
+		opts.WarningFunc = func(msg string) {
+			dl.OnDebug(fmt.Sprintf("[tsshd WARN] %s", msg))
+		}
+	} else if config.Debug {
 		opts.DebugFunc = func(msec int64, msg string) {
 			fmt.Printf("[tsshd %d] %s\n", msec, msg)
 		}
-	}
-	opts.WarningFunc = func(msg string) {
-		fmt.Printf("[tsshd WARN] %s\n", msg)
+		opts.WarningFunc = func(msg string) {
+			fmt.Printf("[tsshd WARN] %s\n", msg)
+		}
+	} else {
+		opts.WarningFunc = func(msg string) {
+			fmt.Printf("[tsshd WARN] %s\n", msg)
+		}
 	}
 
 	client, err := tsshd.NewSshUdpClient(opts)
