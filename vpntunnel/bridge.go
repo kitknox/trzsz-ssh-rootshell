@@ -27,7 +27,10 @@ package vpntunnel
 import (
 	"fmt"
 	"log"
+	"net"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,8 +39,11 @@ import (
 
 const (
 	// Keep Go heap conservative inside NEPacketTunnelProvider's tight memory budget.
-	goHeapLimitBytes = 24 * 1024 * 1024
-	goGCPercent      = 50
+	// Use stricter limits for TSSH and looser limits for SOCKS5/SSH mode.
+	tsshHeapLimitBytes = 34 * 1024 * 1024
+	tsshGCPercent      = 90
+	sshHeapLimitBytes  = -1 // rely on socket buffer caps for SSH memory control
+	sshGCPercent       = 100
 )
 
 // TunnelCallback is the gomobile interface for receiving tunnel events.
@@ -76,8 +82,13 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 	}
 
 	// Tune GC for extension memory constraints to reduce OOM terminations.
-	debug.SetMemoryLimit(goHeapLimitBytes)
-	debug.SetGCPercent(goGCPercent)
+	if cfg.TransportType == "tssh" {
+		debug.SetMemoryLimit(tsshHeapLimitBytes)
+		debug.SetGCPercent(tsshGCPercent)
+	} else {
+		debug.SetMemoryLimit(sshHeapLimitBytes)
+		debug.SetGCPercent(sshGCPercent)
+	}
 
 	stats := &tunnelStats{}
 	globalStats = stats
@@ -234,7 +245,9 @@ func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
 		ServerID:   cfg.TSSHServerID,
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.TSSHHost, cfg.TSSHPort)
+	host := strings.TrimPrefix(cfg.TSSHHost, "[")
+	host = strings.TrimSuffix(host, "]")
+	addr := net.JoinHostPort(host, strconv.Itoa(cfg.TSSHPort))
 
 	// VPN extension runs as a system daemon — use regular UDP sockets
 	// (unlike the main app which uses in-process pipes because UDP dies on background).

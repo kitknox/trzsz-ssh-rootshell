@@ -108,15 +108,19 @@ type socks5Dialer struct {
 }
 
 func (d *socks5Dialer) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
-	proxyConn, err := net.DialTimeout("tcp", d.proxyAddr, dialTimeout)
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	proxyConn, err := dialer.DialContext(ctx, "tcp", d.proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("socks5 connect to proxy %s: %w", d.proxyAddr, err)
 	}
 
+	// Bound handshake time to avoid hanging dial goroutines under proxy pressure.
+	_ = proxyConn.SetDeadline(time.Now().Add(dialTimeout))
 	if err := socks5Handshake(proxyConn, addr); err != nil {
 		proxyConn.Close()
 		return nil, fmt.Errorf("socks5 handshake for %s: %w", addr, err)
 	}
+	_ = proxyConn.SetDeadline(time.Time{})
 
 	return proxyConn, nil
 }
@@ -146,15 +150,24 @@ func socks5Handshake(conn net.Conn, targetAddr string) error {
 		return fmt.Errorf("unsupported auth method: %x", methodResp[1])
 	}
 
-	// CONNECT request with domain name
+	// CONNECT request with address type chosen by host kind.
 	req := []byte{
 		0x05, // SOCKS5
 		0x01, // CONNECT
 		0x00, // reserved
-		0x03, // domain name
-		byte(len(host)),
 	}
-	req = append(req, []byte(host)...)
+	if ip := net.ParseIP(host); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			req = append(req, 0x01) // IPv4
+			req = append(req, v4...)
+		} else {
+			req = append(req, 0x04) // IPv6
+			req = append(req, ip.To16()...)
+		}
+	} else {
+		req = append(req, 0x03, byte(len(host))) // domain
+		req = append(req, []byte(host)...)
+	}
 	req = append(req, byte(port>>8), byte(port&0xff))
 
 	if _, err := conn.Write(req); err != nil {

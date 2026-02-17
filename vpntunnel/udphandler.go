@@ -27,9 +27,9 @@ package vpntunnel
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,8 +39,9 @@ import (
 )
 
 const (
-	udpIdleTimeout = 30 * time.Second
-	udpBufferSize  = 16 * 1024
+	udpIdleTimeout    = 30 * time.Second
+	udpBufferSize     = 16 * 1024
+	maxActiveUDPFlows = 512
 )
 
 // udpForwarder handles UDP packets from the netstack.
@@ -77,8 +78,8 @@ func newUDPForwarder(dialer udpDialer, tcpDial tcpDialer, stats *tunnelStats) *u
 // handleUDP is the UDP forwarder function registered with gVisor.
 func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 	id := r.ID()
-	dstAddr := fmt.Sprintf("%s:%d", id.LocalAddress.String(), id.LocalPort)
-	srcAddr := fmt.Sprintf("%s:%d", id.RemoteAddress.String(), id.RemotePort)
+	dstAddr := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
+	srcAddr := net.JoinHostPort(id.RemoteAddress.String(), strconv.Itoa(int(id.RemotePort)))
 	key := srcAddr + "->" + dstAddr
 
 	var wq waiter.Queue
@@ -92,6 +93,11 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 	existing, ok := f.conns[key]
 	if ok {
 		existing.lastUse = time.Now()
+		f.mu.Unlock()
+		ep.Close()
+		return
+	}
+	if len(f.conns) >= maxActiveUDPFlows {
 		f.mu.Unlock()
 		ep.Close()
 		return

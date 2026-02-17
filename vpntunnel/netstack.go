@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,10 +48,24 @@ import (
 )
 
 const (
-	nicID               = 1
-	channelEndpointSize = 64        // packet queue size
-	tcpReceiveWindow    = 256 << 10 // 256KB
-	tcpBridgeBufferSize = 16 * 1024
+	nicID                       = 1
+	channelEndpointSize         = 256       // packet queue size
+	tcpReceiveWindow            = 256 << 10 // 256KB
+	tcpBridgeBufferSize         = 16 * 1024
+	tcpForwarderMaxInFlight     = 1024
+	tcpIdleTimeout              = 3 * time.Minute
+	tcpSendBufferMinSSH         = 16 << 10
+	tcpSendBufferDefaultSSH     = 64 << 10
+	tcpSendBufferMaxSSH         = 128 << 10
+	tcpReceiveBufferMinSSH      = 16 << 10
+	tcpReceiveBufferDefaultSSH  = 64 << 10
+	tcpReceiveBufferMaxSSH      = 128 << 10
+	tcpSendBufferMinTSSH        = 16 << 10
+	tcpSendBufferDefaultTSSH    = 64 << 10
+	tcpSendBufferMaxTSSH        = 128 << 10
+	tcpReceiveBufferMinTSSH     = 16 << 10
+	tcpReceiveBufferDefaultTSSH = 64 << 10
+	tcpReceiveBufferMaxTSSH     = 128 << 10
 )
 
 // tunnelStack wraps the gVisor netstack and channel endpoint.
@@ -90,6 +106,49 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 		return nil, fmt.Errorf("create NIC: %v", err)
 	}
 
+	// Cap per-socket TCP buffers in both transports to keep RSS under
+	// NEPacketTunnelProvider limits. TSSH stays tighter than SSH.
+	var sendBuf tcpip.TCPSendBufferSizeRangeOption
+	var recvBuf tcpip.TCPReceiveBufferSizeRangeOption
+	moderateRecv := tcpip.TCPModerateReceiveBufferOption(true)
+	if cfg.TransportType == "tssh" {
+		sendBuf = tcpip.TCPSendBufferSizeRangeOption{
+			Min:     tcpSendBufferMinTSSH,
+			Default: tcpSendBufferDefaultTSSH,
+			Max:     tcpSendBufferMaxTSSH,
+		}
+		recvBuf = tcpip.TCPReceiveBufferSizeRangeOption{
+			Min:     tcpReceiveBufferMinTSSH,
+			Default: tcpReceiveBufferDefaultTSSH,
+			Max:     tcpReceiveBufferMaxTSSH,
+		}
+		// Keep receive buffers fixed in TSSH mode to avoid runaway growth.
+		moderateRecv = tcpip.TCPModerateReceiveBufferOption(false)
+	} else {
+		sendBuf = tcpip.TCPSendBufferSizeRangeOption{
+			Min:     tcpSendBufferMinSSH,
+			Default: tcpSendBufferDefaultSSH,
+			Max:     tcpSendBufferMaxSSH,
+		}
+		recvBuf = tcpip.TCPReceiveBufferSizeRangeOption{
+			Min:     tcpReceiveBufferMinSSH,
+			Default: tcpReceiveBufferDefaultSSH,
+			Max:     tcpReceiveBufferMaxSSH,
+		}
+	}
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &sendBuf); err != nil {
+		cancel()
+		return nil, fmt.Errorf("set tcp send buffer range: %v", err)
+	}
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &recvBuf); err != nil {
+		cancel()
+		return nil, fmt.Errorf("set tcp receive buffer range: %v", err)
+	}
+	if err := s.SetTransportProtocolOption(tcp.ProtocolNumber, &moderateRecv); err != nil {
+		cancel()
+		return nil, fmt.Errorf("set tcp receive buffer moderation: %v", err)
+	}
+
 	// Add default routes (catch-all)
 	s.SetRouteTable([]tcpip.Route{
 		{
@@ -108,8 +167,8 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	// Enable spoofing so we can respond with any source address
 	s.SetSpoofing(nicID, true)
 
-	// Set up TCP forwarding
-	tcpForwarder := tcp.NewForwarder(s, tcpReceiveWindow, 1024, func(r *tcp.ForwarderRequest) {
+	// Set up TCP forwarding.
+	tcpForwarder := tcp.NewForwarder(s, tcpReceiveWindow, tcpForwarderMaxInFlight, func(r *tcp.ForwarderRequest) {
 		go handleTCPForward(ctx, r, tcpDial, stats)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
@@ -207,7 +266,7 @@ func (ts *tunnelStack) close() {
 // handleTCPForward handles a single TCP connection from the netstack.
 func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDialer, stats *tunnelStats) {
 	id := r.ID()
-	dstAddr := fmt.Sprintf("%s:%d", id.LocalAddress.String(), id.LocalPort)
+	dstAddr := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 
 	var wq waiter.Queue
 	ep, tcpipErr := r.CreateEndpoint(&wq)
@@ -248,6 +307,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 				if tcpipErr == nil {
 					n := res.Count
 					if n > 0 {
+						_ = remote.SetWriteDeadline(time.Now().Add(tcpIdleTimeout))
 						if _, err := remote.Write(buf[:n]); err != nil {
 							wq.EventUnregister(&w)
 							return
@@ -280,6 +340,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 		defer func() { done <- struct{}{} }()
 		buf := make([]byte, tcpBridgeBufferSize)
 		for {
+			_ = remote.SetReadDeadline(time.Now().Add(tcpIdleTimeout))
 			n, err := remote.Read(buf)
 			if n > 0 {
 				data := buf[:n]
@@ -290,6 +351,10 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 				stats.addBytesIn(n)
 			}
 			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					// Idle timeout: close stale connection to avoid resource leaks.
+					return
+				}
 				if err != io.EOF {
 					log.Printf("vpntunnel: tcp remote read %s: %v", dstAddr, err)
 				}
