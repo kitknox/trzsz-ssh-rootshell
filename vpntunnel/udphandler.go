@@ -40,7 +40,7 @@ import (
 
 const (
 	udpIdleTimeout = 30 * time.Second
-	udpBufferSize  = 65535
+	udpBufferSize  = 16 * 1024
 )
 
 // udpForwarder handles UDP packets from the netstack.
@@ -147,7 +147,7 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 				for {
 					var tcpipErr tcpip.Error
 					sw := tcpip.SliceWriter(buf)
-				res, tcpipErr = ep.Read(&sw, tcpip.ReadOptions{})
+					res, tcpipErr = ep.Read(&sw, tcpip.ReadOptions{})
 					if tcpipErr == nil {
 						break
 					}
@@ -166,6 +166,9 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 
 				n := res.Count
 				if n > 0 {
+					f.mu.Lock()
+					tracker.lastUse = time.Now()
+					f.mu.Unlock()
 					remote.SetWriteDeadline(time.Now().Add(udpIdleTimeout))
 					if err := remote.Write(buf[:n]); err != nil {
 						return
@@ -186,6 +189,9 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					return
 				}
 				if n > 0 {
+					f.mu.Lock()
+					tracker.lastUse = time.Now()
+					f.mu.Unlock()
 					data := buf[:n]
 					ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
 					f.stats.addBytesIn(n)
@@ -278,6 +284,9 @@ func (f *udpForwarder) cleanup() {
 	now := time.Now()
 	for key, tracker := range f.conns {
 		if now.Sub(tracker.lastUse) > udpIdleTimeout {
+			if tracker.remote != nil {
+				_ = tracker.remote.Close()
+			}
 			tracker.cancel()
 			delete(f.conns, key)
 		}

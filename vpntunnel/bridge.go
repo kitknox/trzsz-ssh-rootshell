@@ -27,10 +27,17 @@ package vpntunnel
 import (
 	"fmt"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/trzsz/tsshd/tsshd"
+)
+
+const (
+	// Keep Go heap conservative inside NEPacketTunnelProvider's tight memory budget.
+	goHeapLimitBytes = 24 * 1024 * 1024
+	goGCPercent      = 50
 )
 
 // TunnelCallback is the gomobile interface for receiving tunnel events.
@@ -67,6 +74,10 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 	if err != nil {
 		return err
 	}
+
+	// Tune GC for extension memory constraints to reduce OOM terminations.
+	debug.SetMemoryLimit(goHeapLimitBytes)
+	debug.SetGCPercent(goGCPercent)
 
 	stats := &tunnelStats{}
 	globalStats = stats
@@ -142,6 +153,7 @@ func StopTunnel() error {
 
 	globalStats = nil
 	globalConfig = nil
+	debug.FreeOSMemory()
 	log.Printf("vpntunnel: tunnel stopped")
 
 	return nil

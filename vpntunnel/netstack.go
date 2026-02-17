@@ -25,9 +25,9 @@ SOFTWARE.
 package vpntunnel
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"bytes"
 	"io"
 	"log"
 	"sync"
@@ -46,9 +46,10 @@ import (
 )
 
 const (
-	nicID              = 1
-	channelEndpointSize = 256 // packet queue size
-	tcpReceiveWindow   = 1 << 20 // 1MB
+	nicID               = 1
+	channelEndpointSize = 64        // packet queue size
+	tcpReceiveWindow    = 256 << 10 // 256KB
+	tcpBridgeBufferSize = 16 * 1024
 )
 
 // tunnelStack wraps the gVisor netstack and channel endpoint.
@@ -235,7 +236,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	// netstack → remote
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, tcpBridgeBufferSize)
 		for {
 			w, ch := waiter.NewChannelEntry(waiter.ReadableEvents)
 			wq.EventRegister(&w)
@@ -277,7 +278,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	// remote → netstack
 	go func() {
 		defer func() { done <- struct{}{} }()
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, tcpBridgeBufferSize)
 		for {
 			n, err := remote.Read(buf)
 			if n > 0 {
