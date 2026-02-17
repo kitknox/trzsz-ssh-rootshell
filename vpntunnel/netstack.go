@@ -53,7 +53,7 @@ const (
 	tcpReceiveWindow            = 256 << 10 // 256KB
 	tcpBridgeBufferSize         = 16 * 1024
 	tcpForwarderMaxInFlight     = 1024
-	tcpIdleTimeout              = 3 * time.Minute
+	tcpIdleTimeout              = 60 * time.Second
 	tcpSendBufferMinSSH         = 16 << 10
 	tcpSendBufferDefaultSSH     = 64 << 10
 	tcpSendBufferMaxSSH         = 128 << 10
@@ -66,6 +66,7 @@ const (
 	tcpReceiveBufferMinTSSH     = 16 << 10
 	tcpReceiveBufferDefaultTSSH = 64 << 10
 	tcpReceiveBufferMaxTSSH     = 128 << 10
+	maxActiveTCPFlows           = 256
 )
 
 // tunnelStack wraps the gVisor netstack and channel endpoint.
@@ -79,6 +80,7 @@ type tunnelStack struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	mtu     int
+	tcpSem  chan struct{} // limits concurrent TCP flows
 }
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
@@ -168,8 +170,9 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	s.SetSpoofing(nicID, true)
 
 	// Set up TCP forwarding.
+	tcpSem := make(chan struct{}, maxActiveTCPFlows)
 	tcpForwarder := tcp.NewForwarder(s, tcpReceiveWindow, tcpForwarderMaxInFlight, func(r *tcp.ForwarderRequest) {
-		go handleTCPForward(ctx, r, tcpDial, stats)
+		go handleTCPForward(ctx, r, tcpDial, stats, tcpSem)
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
 
@@ -189,6 +192,7 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 		ctx:     ctx,
 		cancel:  cancel,
 		mtu:     mtu,
+		tcpSem:  tcpSem,
 	}
 
 	// Start UDP cleanup goroutine
@@ -264,7 +268,19 @@ func (ts *tunnelStack) close() {
 }
 
 // handleTCPForward handles a single TCP connection from the netstack.
-func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDialer, stats *tunnelStats) {
+func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDialer, stats *tunnelStats, sem chan struct{}) {
+	// Acquire semaphore slot (non-blocking). RST if at capacity.
+	select {
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
+	default:
+		r.Complete(true) // RST — at capacity
+		return
+	}
+
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
 	id := r.ID()
 	dstAddr := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 
@@ -282,7 +298,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	defer stats.connClosed()
 
 	// Dial the remote
-	remote, err := dialer.DialTCP(ctx, dstAddr)
+	remote, err := dialer.DialTCP(connCtx, dstAddr)
 	if err != nil {
 		log.Printf("vpntunnel: tcp dial %s: %v", dstAddr, err)
 		return
@@ -323,7 +339,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 				}
 				select {
 				case <-ch:
-				case <-ctx.Done():
+				case <-connCtx.Done():
 					wq.EventUnregister(&w)
 					return
 				}
@@ -359,9 +375,10 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 		}
 	}()
 
-	// Wait for first direction to finish, then force-close remote to
-	// unblock the other goroutine's Read/Write, then wait for it too.
+	// Wait for first direction to finish, then cancel the per-connection
+	// context and close remote to unblock the other goroutine, then wait.
 	<-done
+	connCancel()
 	remote.Close()
 	<-done
 }
