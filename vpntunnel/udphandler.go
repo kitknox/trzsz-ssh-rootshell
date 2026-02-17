@@ -179,7 +179,6 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					if err := remote.Write(buf[:n]); err != nil {
 						return
 					}
-					f.stats.addBytesOut(n)
 				}
 			}
 		}()
@@ -200,7 +199,6 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					f.mu.Unlock()
 					data := buf[:n]
 					ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
-					f.stats.addBytesIn(n)
 				}
 			}
 		}()

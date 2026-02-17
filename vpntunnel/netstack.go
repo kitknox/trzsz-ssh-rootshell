@@ -49,7 +49,7 @@ import (
 
 const (
 	nicID                       = 1
-	channelEndpointSize         = 256       // packet queue size
+	channelEndpointSize         = 512       // packet queue size
 	tcpReceiveWindow            = 256 << 10 // 256KB
 	tcpBridgeBufferSize         = 16 * 1024
 	tcpForwarderMaxInFlight     = 1024
@@ -217,7 +217,7 @@ func (ts *tunnelStack) injectPacket(data []byte, family int) {
 		return
 	}
 
-	ts.stats.addBytesIn(len(data))
+	ts.stats.addBytesOut(len(data))
 
 	var protocol tcpip.NetworkProtocolNumber
 	switch family {
@@ -252,7 +252,7 @@ func (ts *tunnelStack) readPacket() ([]byte, int) {
 	}
 
 	data := pkt.ToView().AsSlice()
-	ts.stats.addBytesOut(len(data))
+	ts.stats.addBytesIn(len(data))
 	return append([]byte(nil), data...), family // copy to avoid buffer reuse
 }
 
@@ -287,8 +287,6 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 		log.Printf("vpntunnel: tcp dial %s: %v", dstAddr, err)
 		return
 	}
-	defer remote.Close()
-
 	// Bridge netstack endpoint ↔ remote connection
 	done := make(chan struct{}, 2)
 
@@ -312,7 +310,6 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 							wq.EventUnregister(&w)
 							return
 						}
-						stats.addBytesOut(n)
 					}
 					break
 				}
@@ -348,7 +345,6 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 				if tcpipErr != nil {
 					return
 				}
-				stats.addBytesIn(n)
 			}
 			if err != nil {
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
@@ -363,6 +359,9 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 		}
 	}()
 
-	// Wait for either direction to finish
+	// Wait for first direction to finish, then force-close remote to
+	// unblock the other goroutine's Read/Write, then wait for it too.
+	<-done
+	remote.Close()
 	<-done
 }
