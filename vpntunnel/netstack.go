@@ -54,7 +54,8 @@ const (
 	tcpReceiveWindow            = 256 << 10 // 256KB
 	tcpBridgeBufferSize         = 16 * 1024
 	tcpForwarderMaxInFlight     = 1024
-	tcpIdleTimeout              = 60 * time.Second
+	tcpIdleTimeout              = 30 * time.Second
+	tcpFlowAdmissionWait        = 350 * time.Millisecond
 	tcpSendBufferMinSSH         = 16 << 10
 	tcpSendBufferDefaultSSH     = 64 << 10
 	tcpSendBufferMaxSSH         = 128 << 10
@@ -87,8 +88,8 @@ type tunnelStack struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	mtu      int
-	tcpSem   chan struct{}       // limits concurrent TCP flows
-	packetCh chan packetEntry    // outbound packets for batch reading
+	tcpSem   chan struct{}    // limits concurrent TCP flows
+	packetCh chan packetEntry // outbound packets for batch reading
 }
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
@@ -241,7 +242,7 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	ts.wg.Add(1)
 	go func() {
 		defer ts.wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(udpCleanupInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -315,13 +316,36 @@ func (ts *tunnelStack) close() {
 
 // handleTCPForward handles a single TCP connection from the netstack.
 func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDialer, stats *tunnelStats, sem chan struct{}) {
-	// Acquire semaphore slot (non-blocking). RST if at capacity.
+	// Acquire semaphore slot. Allow a brief admission wait to smooth short
+	// connection bursts from browsers, then RST only if still saturated.
 	select {
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
 	default:
-		r.Complete(true) // RST — at capacity
-		return
+		timer := time.NewTimer(tcpFlowAdmissionWait)
+		select {
+		case sem <- struct{}{}:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			r.Complete(true)
+			return
+		case <-timer.C:
+			stats.tcpCapacityDrop()
+			r.Complete(true) // RST — at sustained capacity
+			return
+		}
 	}
 
 	connCtx, connCancel := context.WithCancel(ctx)
@@ -340,8 +364,8 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	r.Complete(false)
 	defer ep.Close()
 
-	stats.connOpened()
-	defer stats.connClosed()
+	stats.connOpenedTCP()
+	defer stats.connClosedTCP()
 
 	// Dial the remote
 	remote, err := dialer.DialTCP(connCtx, dstAddr)

@@ -39,9 +39,11 @@ import (
 )
 
 const (
-	udpIdleTimeout    = 30 * time.Second
-	udpBufferSize     = 16 * 1024
-	maxActiveUDPFlows = 512
+	udpIdleTimeout       = 15 * time.Second
+	udpCleanupInterval   = 5 * time.Second
+	udpAdmissionEvictAge = 5 * time.Second
+	udpBufferSize        = 16 * 1024
+	maxActiveUDPFlows    = 512
 )
 
 // udpForwarder handles UDP packets from the netstack.
@@ -98,9 +100,13 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 		return
 	}
 	if len(f.conns) >= maxActiveUDPFlows {
-		f.mu.Unlock()
-		ep.Close()
-		return
+		_ = f.evictOldestIdleLocked(udpAdmissionEvictAge)
+		if len(f.conns) >= maxActiveUDPFlows {
+			f.stats.udpCapacityDrop()
+			f.mu.Unlock()
+			ep.Close()
+			return
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,14 +114,14 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 	f.conns[key] = tracker
 	f.mu.Unlock()
 
-	f.stats.connOpened()
+	f.stats.connOpenedUDP()
 
 	go func() {
 		defer func() {
 			f.mu.Lock()
 			delete(f.conns, key)
 			f.mu.Unlock()
-			f.stats.connClosed()
+			f.stats.connClosedUDP()
 			ep.Close()
 			cancel()
 			if tracker.remote != nil {
@@ -205,6 +211,32 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 
 		<-done
 	}()
+}
+
+func (f *udpForwarder) evictOldestIdleLocked(minIdle time.Duration) bool {
+	now := time.Now()
+	var victimKey string
+	var victim *udpConnTracker
+	oldest := now
+	for key, tracker := range f.conns {
+		if now.Sub(tracker.lastUse) < minIdle {
+			continue
+		}
+		if victim == nil || tracker.lastUse.Before(oldest) {
+			victim = tracker
+			victimKey = key
+			oldest = tracker.lastUse
+		}
+	}
+	if victim == nil {
+		return false
+	}
+	if victim.remote != nil {
+		_ = victim.remote.Close()
+	}
+	victim.cancel()
+	delete(f.conns, victimKey)
+	return true
 }
 
 // handleDNSOverTCP forwards a DNS query over TCP (for SSH mode where UDP isn't available).

@@ -26,25 +26,41 @@ package vpntunnel
 
 import (
 	"encoding/json"
+	"runtime"
 	"sync/atomic"
 )
 
 // tunnelStats tracks byte counters and active connections.
 type tunnelStats struct {
-	bytesIn    atomic.Int64
-	bytesOut   atomic.Int64
-	activeConns atomic.Int32
-	totalConns  atomic.Int64
+	bytesIn          atomic.Int64
+	bytesOut         atomic.Int64
+	activeConns      atomic.Int32
+	totalConns       atomic.Int64
+	activeTCPConns   atomic.Int32
+	activeUDPConns   atomic.Int32
+	tcpCapacityDrops atomic.Int64
+	udpCapacityDrops atomic.Int64
 }
 
 // TunnelStatus is the JSON-serializable status returned by GetStatus.
 type TunnelStatus struct {
-	Connected       bool   `json:"connected"`
-	BytesIn         int64  `json:"bytesIn"`
-	BytesOut        int64  `json:"bytesOut"`
-	ActiveConns     int    `json:"activeConns"`
-	TotalConns      int64  `json:"totalConns"`
-	TransportType   string `json:"transportType"`
+	Connected         bool   `json:"connected"`
+	BytesIn           int64  `json:"bytesIn"`
+	BytesOut          int64  `json:"bytesOut"`
+	ActiveConns       int    `json:"activeConns"`
+	ActiveTCPConns    int    `json:"activeTCPConns"`
+	ActiveUDPConns    int    `json:"activeUDPConns"`
+	TotalConns        int64  `json:"totalConns"`
+	TCPCapacityDrops  int64  `json:"tcpCapacityDrops"`
+	UDPCapacityDrops  int64  `json:"udpCapacityDrops"`
+	TransportType     string `json:"transportType"`
+	GoHeapAllocBytes  int64  `json:"goHeapAllocBytes"`
+	GoHeapInuseBytes  int64  `json:"goHeapInuseBytes"`
+	GoStackInuseBytes int64  `json:"goStackInuseBytes"`
+	GoSysBytes        int64  `json:"goSysBytes"`
+	GoNumGC           uint32 `json:"goNumGC"`
+	GoGoroutines      int    `json:"goGoroutines"`
+	GoLiveObjects     int64  `json:"goLiveObjects"`
 }
 
 func (s *tunnelStats) addBytesIn(n int) {
@@ -55,23 +71,62 @@ func (s *tunnelStats) addBytesOut(n int) {
 	s.bytesOut.Add(int64(n))
 }
 
-func (s *tunnelStats) connOpened() {
+func (s *tunnelStats) connOpenedTCP() {
 	s.activeConns.Add(1)
+	s.activeTCPConns.Add(1)
 	s.totalConns.Add(1)
 }
 
-func (s *tunnelStats) connClosed() {
+func (s *tunnelStats) connClosedTCP() {
 	s.activeConns.Add(-1)
+	s.activeTCPConns.Add(-1)
+}
+
+func (s *tunnelStats) connOpenedUDP() {
+	s.activeConns.Add(1)
+	s.activeUDPConns.Add(1)
+	s.totalConns.Add(1)
+}
+
+func (s *tunnelStats) connClosedUDP() {
+	s.activeConns.Add(-1)
+	s.activeUDPConns.Add(-1)
+}
+
+func (s *tunnelStats) tcpCapacityDrop() {
+	s.tcpCapacityDrops.Add(1)
+}
+
+func (s *tunnelStats) udpCapacityDrop() {
+	s.udpCapacityDrops.Add(1)
 }
 
 func (s *tunnelStats) toStatus(connected bool, transportType string) string {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	liveObjects := int64(0)
+	if mem.Mallocs >= mem.Frees {
+		liveObjects = int64(mem.Mallocs - mem.Frees)
+	}
+
 	status := TunnelStatus{
-		Connected:     connected,
-		BytesIn:       s.bytesIn.Load(),
-		BytesOut:      s.bytesOut.Load(),
-		ActiveConns:   int(s.activeConns.Load()),
-		TotalConns:    s.totalConns.Load(),
-		TransportType: transportType,
+		Connected:         connected,
+		BytesIn:           s.bytesIn.Load(),
+		BytesOut:          s.bytesOut.Load(),
+		ActiveConns:       int(s.activeConns.Load()),
+		ActiveTCPConns:    int(s.activeTCPConns.Load()),
+		ActiveUDPConns:    int(s.activeUDPConns.Load()),
+		TotalConns:        s.totalConns.Load(),
+		TCPCapacityDrops:  s.tcpCapacityDrops.Load(),
+		UDPCapacityDrops:  s.udpCapacityDrops.Load(),
+		TransportType:     transportType,
+		GoHeapAllocBytes:  int64(mem.HeapAlloc),
+		GoHeapInuseBytes:  int64(mem.HeapInuse),
+		GoStackInuseBytes: int64(mem.StackInuse),
+		GoSysBytes:        int64(mem.Sys),
+		GoNumGC:           mem.NumGC,
+		GoGoroutines:      runtime.NumGoroutine(),
+		GoLiveObjects:     liveObjects,
 	}
 	b, _ := json.Marshal(status)
 	return string(b)
