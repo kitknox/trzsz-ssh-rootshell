@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/trzsz/tsshd/tsshd"
 )
@@ -204,22 +205,43 @@ func GetStatus() string {
 }
 
 // connectTSSH establishes a tsshd client connection using the config parameters.
+// The VPN extension spawns tsshd via SSH, parses the JSON output, and passes
+// all server info fields through VPNTunnelConfig.
 func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
 	serverInfo := &tsshd.ServerInfo{
-		Port: cfg.TSSHPort,
-		Mode: cfg.TSSHMode,
-		Pass: cfg.TSSHPass,
-		Salt: cfg.TSSHSalt,
+		ServerVer:  cfg.TSSHServerVer,
+		Port:       cfg.TSSHPort,
+		Mode:       cfg.TSSHMode,
+		Pass:       cfg.TSSHPass,
+		Salt:       cfg.TSSHSalt,
+		ServerCert: cfg.TSSHServerCert,
+		ClientCert: cfg.TSSHClientCert,
+		ClientKey:  cfg.TSSHClientKey,
+		ProxyKey:   cfg.TSSHProxyKey,
+		ClientID:   cfg.TSSHClientID,
+		ServerID:   cfg.TSSHServerID,
 	}
 
+	addr := fmt.Sprintf("%s:%d", cfg.TSSHHost, cfg.TSSHPort)
+
+	// VPN extension runs as a system daemon — use regular UDP sockets
+	// (unlike the main app which uses in-process pipes because UDP dies on background).
 	opts := &tsshd.UdpClientOptions{
-		TsshdAddr: fmt.Sprintf("%s:%d", cfg.TSSHHost, cfg.TSSHPort),
-		ServerInfo: serverInfo,
+		EnableWarning:    true,
+		TsshdAddr:        addr,
+		ServerInfo:       serverInfo,
+		ConnectTimeout:   30 * time.Second,
+		AliveTimeout:     24 * time.Hour,
+		HeartbeatTimeout: 3 * time.Second,
+		IntervalTime:     1 * time.Second,
+		WarningFunc: func(msg string) {
+			log.Printf("vpntunnel tssh: %s", msg)
+		},
 	}
 
 	c, err := tsshd.NewSshUdpClient(opts)
 	if err != nil {
-		return nil, fmt.Errorf("tssh client connect to %s:%d: %w", cfg.TSSHHost, cfg.TSSHPort, err)
+		return nil, fmt.Errorf("tssh client connect to %s: %w", addr, err)
 	}
 
 	return c, nil
