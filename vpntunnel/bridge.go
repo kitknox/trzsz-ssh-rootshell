@@ -208,6 +208,23 @@ func ReadPacket() *PacketResult {
 	return &PacketResult{Data: data, Family: family}
 }
 
+// ReadPacketNonBlocking returns the next outbound IP packet without blocking.
+// Returns nil immediately if no packet is queued or the tunnel is stopped.
+func ReadPacketNonBlocking() *PacketResult {
+	globalMu.Lock()
+	ts := globalStack
+	globalMu.Unlock()
+
+	if ts == nil {
+		return nil
+	}
+	data, family := ts.readPacketNonBlocking()
+	if data == nil {
+		return nil
+	}
+	return &PacketResult{Data: data, Family: family}
+}
+
 // GetStatus returns JSON status including connected state and byte counters.
 func GetStatus() string {
 	globalMu.Lock()

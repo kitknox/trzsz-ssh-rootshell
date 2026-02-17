@@ -49,7 +49,8 @@ import (
 
 const (
 	nicID                       = 1
-	channelEndpointSize         = 512       // packet queue size
+	channelEndpointSize         = 1024      // packet queue size
+	packetReaderChSize          = 128       // intermediary Go channel for batch reads
 	tcpReceiveWindow            = 256 << 10 // 256KB
 	tcpBridgeBufferSize         = 16 * 1024
 	tcpForwarderMaxInFlight     = 1024
@@ -69,18 +70,25 @@ const (
 	maxActiveTCPFlows           = 256
 )
 
+// packetEntry holds a single outbound packet read from the channel endpoint.
+type packetEntry struct {
+	data   []byte
+	family int
+}
+
 // tunnelStack wraps the gVisor netstack and channel endpoint.
 type tunnelStack struct {
-	stack   *stack.Stack
-	ep      *channel.Endpoint
-	tcpDial tcpDialer
-	udpFwd  *udpForwarder
-	stats   *tunnelStats
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	mtu     int
-	tcpSem  chan struct{} // limits concurrent TCP flows
+	stack    *stack.Stack
+	ep       *channel.Endpoint
+	tcpDial  tcpDialer
+	udpFwd   *udpForwarder
+	stats    *tunnelStats
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	mtu      int
+	tcpSem   chan struct{}       // limits concurrent TCP flows
+	packetCh chan packetEntry    // outbound packets for batch reading
 }
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
@@ -183,17 +191,51 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarderGvisor.HandlePacket)
 
+	packetCh := make(chan packetEntry, packetReaderChSize)
+
 	ts := &tunnelStack{
-		stack:   s,
-		ep:      ep,
-		tcpDial: tcpDial,
-		udpFwd:  udpFwd,
-		stats:   stats,
-		ctx:     ctx,
-		cancel:  cancel,
-		mtu:     mtu,
-		tcpSem:  tcpSem,
+		stack:    s,
+		ep:       ep,
+		tcpDial:  tcpDial,
+		udpFwd:   udpFwd,
+		stats:    stats,
+		ctx:      ctx,
+		cancel:   cancel,
+		mtu:      mtu,
+		tcpSem:   tcpSem,
+		packetCh: packetCh,
 	}
+
+	// Start packet reader goroutine: drains the channel endpoint into a
+	// Go channel so Swift can do non-blocking batch reads.
+	ts.wg.Add(1)
+	go func() {
+		defer ts.wg.Done()
+		defer close(packetCh)
+		for {
+			pkt := ep.ReadContext(ctx)
+			if pkt == nil {
+				return
+			}
+			family := 2 // AF_INET
+			if pkt.NetworkProtocolNumber == header.IPv6ProtocolNumber {
+				family = 30 // AF_INET6 on Darwin
+			}
+			data := pkt.ToView().AsSlice()
+			stats.addBytesIn(len(data))
+			entry := packetEntry{
+				data:   append([]byte(nil), data...), // copy before DecRef
+				family: family,
+			}
+			pkt.DecRef()
+
+			select {
+			case packetCh <- entry:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	// Start UDP cleanup goroutine
 	ts.wg.Add(1)
@@ -240,24 +282,28 @@ func (ts *tunnelStack) injectPacket(data []byte, family int) {
 	pkt.DecRef()
 }
 
-// readPacket reads the next outbound IP packet from the netstack (blocking).
-// Returns the packet data and protocol family.
+// readPacket reads the next outbound IP packet (blocking).
+// Returns the packet data and protocol family, or (nil, 0) on shutdown.
 func (ts *tunnelStack) readPacket() ([]byte, int) {
-	pkt := ts.ep.ReadContext(ts.ctx)
-	if pkt == nil {
+	p, ok := <-ts.packetCh
+	if !ok {
 		return nil, 0
 	}
-	defer pkt.DecRef()
+	return p.data, p.family
+}
 
-	// Determine protocol family
-	family := 2 // AF_INET
-	if pkt.NetworkProtocolNumber == header.IPv6ProtocolNumber {
-		family = 30 // AF_INET6 on Darwin
+// readPacketNonBlocking returns the next outbound packet without blocking.
+// Returns (nil, 0) immediately if no packet is queued.
+func (ts *tunnelStack) readPacketNonBlocking() ([]byte, int) {
+	select {
+	case p, ok := <-ts.packetCh:
+		if !ok {
+			return nil, 0
+		}
+		return p.data, p.family
+	default:
+		return nil, 0
 	}
-
-	data := pkt.ToView().AsSlice()
-	ts.stats.addBytesIn(len(data))
-	return append([]byte(nil), data...), family // copy to avoid buffer reuse
 }
 
 // close shuts down the netstack.
@@ -356,10 +402,33 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 			_ = remote.SetReadDeadline(time.Now().Add(tcpIdleTimeout))
 			n, err := remote.Read(buf)
 			if n > 0 {
+				// Write all data to gVisor endpoint, handling partial writes
+				// and back-pressure. ep.Write() with default Atomic=false may
+				// write fewer bytes than requested (partial write, nil error)
+				// or return ErrWouldBlock when the send buffer is completely
+				// full. Both cases require retry to avoid data loss.
 				data := buf[:n]
-				_, tcpipErr := ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
-				if tcpipErr != nil {
-					return
+				for len(data) > 0 {
+					nw, tcpipErr := ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
+					if nw > 0 {
+						data = data[nw:]
+					}
+					if tcpipErr == nil {
+						continue
+					}
+					if _, ok := tcpipErr.(*tcpip.ErrWouldBlock); !ok {
+						return
+					}
+					// Send buffer full — wait for space before retrying.
+					ww, ch := waiter.NewChannelEntry(waiter.WritableEvents)
+					wq.EventRegister(&ww)
+					select {
+					case <-ch:
+					case <-connCtx.Done():
+						wq.EventUnregister(&ww)
+						return
+					}
+					wq.EventUnregister(&ww)
 				}
 			}
 			if err != nil {
