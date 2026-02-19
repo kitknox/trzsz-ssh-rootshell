@@ -26,6 +26,7 @@ package iosbridge
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -48,11 +49,11 @@ type ForwardCallback interface {
 // ForwardConfig describes a single port forward rule.
 type ForwardConfig struct {
 	ForwardID   string // Unique identifier (UUID from Swift)
-	Direction   string // "local" or "remote"
+	Direction   string // "local", "remote", or "dynamic"
 	BindAddress string // Address to bind (empty = 127.0.0.1 for both local and remote)
 	BindPort    int    // Port to listen on (must be explicit >0 for remote forwards)
-	TargetHost  string // Host to connect to
-	TargetPort  int    // Port to connect to
+	TargetHost  string // Host to connect to (unused for dynamic)
+	TargetPort  int    // Port to connect to (unused for dynamic)
 }
 
 // NewForwardConfig creates a new ForwardConfig (gomobile constructor).
@@ -165,6 +166,8 @@ func (pf *PortForwarder) StartForward(config *ForwardConfig) error {
 		go pf.runLocalForward(ctx, af)
 	case "remote":
 		go pf.runRemoteForward(ctx, af)
+	case "dynamic":
+		go pf.runDynamicForward(ctx, af)
 	default:
 		pf.mu.Lock()
 		delete(pf.forwards, cfgCopy.ForwardID)
@@ -389,6 +392,198 @@ func (pf *PortForwarder) runRemoteForward(ctx context.Context, af *activeForward
 			pf.callback.OnConnectionClosed(cfg.ForwardID, connID, bytesIn, bytesOut)
 		}()
 	}
+}
+
+// runDynamicForward implements -D: SOCKS5 proxy that dials remote via tsshd per CONNECT request.
+func (pf *PortForwarder) runDynamicForward(ctx context.Context, af *activeForward) {
+	cfg := &af.config
+	bindAddr := cfg.BindAddress
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1"
+	}
+	listenAddr := net.JoinHostPort(bindAddr, strconv.Itoa(cfg.BindPort))
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		pf.callback.OnForwardError(cfg.ForwardID, fmt.Sprintf("Failed to listen on %s: %v", listenAddr, err))
+		pf.removeForwardAndNotify(cfg.ForwardID)
+		return
+	}
+	af.setListener(listener)
+
+	if ctx.Err() != nil {
+		af.closeListener()
+		return
+	}
+
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+	pf.callback.OnForwardReady(cfg.ForwardID, actualPort)
+
+	go func() {
+		<-ctx.Done()
+		af.closeListener()
+	}()
+
+	for {
+		local, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			pf.callback.OnForwardError(cfg.ForwardID, fmt.Sprintf("Accept failed: %v", err))
+			pf.removeForwardAndNotify(cfg.ForwardID)
+			return
+		}
+
+		connID := pf.nextConnID.Add(1)
+		af.wg.Add(1)
+		go func() {
+			defer af.wg.Done()
+			pf.handleSOCKS5Connection(ctx, cfg.ForwardID, connID, local)
+		}()
+	}
+}
+
+// socks5Error carries a SOCKS5 REP code alongside the Go error message.
+// handleSOCKS5Connection uses the code to send a proper SOCKS5 failure reply.
+type socks5Error struct {
+	rep byte   // SOCKS5 REP code (0x01-0x08)
+	msg string // human-readable description
+}
+
+func (e *socks5Error) Error() string { return e.msg }
+
+// handleSOCKS5Connection handles a single SOCKS5 client connection.
+func (pf *PortForwarder) handleSOCKS5Connection(ctx context.Context, forwardID string, connID int64, local net.Conn) {
+	host, port, err := socks5Handshake(local)
+	if err != nil {
+		pf.callback.OnForwardError(forwardID, fmt.Sprintf("SOCKS5 handshake failed: %v", err))
+		// Send SOCKS5 error reply if we have a REP code (post-method-negotiation errors)
+		if se, ok := err.(*socks5Error); ok {
+			socks5SendReply(local, se.rep)
+		}
+		_ = local.Close()
+		return
+	}
+
+	pf.callback.OnConnectionOpened(forwardID, connID)
+
+	targetAddr := net.JoinHostPort(host, strconv.Itoa(port))
+	remote, err := pf.transport.client.DialTimeout("tcp", targetAddr, 30*time.Second)
+	if err != nil {
+		socks5SendReply(local, 0x05) // connection refused
+		_ = local.Close()
+		pf.callback.OnForwardError(forwardID, fmt.Sprintf("Remote dial %s failed: %v", targetAddr, err))
+		pf.callback.OnConnectionClosed(forwardID, connID, 0, 0)
+		return
+	}
+
+	// Send success reply
+	socks5SendReply(local, 0x00)
+
+	bytesIn, bytesOut := bridgeConnections(local, remote)
+	pf.callback.OnConnectionClosed(forwardID, connID, bytesIn, bytesOut)
+}
+
+// socks5Handshake performs SOCKS5 method negotiation and parses a CONNECT request.
+// Returns the target host and port from the CONNECT request.
+// Post-negotiation errors are returned as *socks5Error with the appropriate REP code.
+func socks5Handshake(conn net.Conn) (string, int, error) {
+	// Method negotiation
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return "", 0, fmt.Errorf("read method header: %w", err)
+	}
+	if header[0] != 0x05 {
+		return "", 0, fmt.Errorf("unsupported SOCKS version: %d", header[0])
+	}
+	nmethods := int(header[1])
+	methods := make([]byte, nmethods)
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return "", 0, fmt.Errorf("read methods: %w", err)
+	}
+
+	// Verify the client offers no-auth (0x00)
+	hasNoAuth := false
+	for _, m := range methods {
+		if m == 0x00 {
+			hasNoAuth = true
+			break
+		}
+	}
+	if !hasNoAuth {
+		// Reply with 0xFF = no acceptable methods
+		_, _ = conn.Write([]byte{0x05, 0xFF})
+		return "", 0, fmt.Errorf("client does not offer no-auth method")
+	}
+
+	// Reply: no auth required
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return "", 0, fmt.Errorf("write method reply: %w", err)
+	}
+
+	// CONNECT request
+	reqHeader := make([]byte, 4)
+	if _, err := io.ReadFull(conn, reqHeader); err != nil {
+		return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read request header: %v", err)}
+	}
+	if reqHeader[0] != 0x05 {
+		return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("unsupported SOCKS version in request: %d", reqHeader[0])}
+	}
+	if reqHeader[1] != 0x01 {
+		return "", 0, &socks5Error{rep: 0x07, msg: fmt.Sprintf("unsupported SOCKS command: %d (only CONNECT supported)", reqHeader[1])}
+	}
+
+	atyp := reqHeader[3]
+	var host string
+	switch atyp {
+	case 0x01: // IPv4
+		ip := make([]byte, 4)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read IPv4 address: %v", err)}
+		}
+		host = net.IP(ip).String()
+	case 0x03: // Domain
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read domain length: %v", err)}
+		}
+		domain := make([]byte, lenBuf[0])
+		if _, err := io.ReadFull(conn, domain); err != nil {
+			return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read domain: %v", err)}
+		}
+		host = string(domain)
+	case 0x04: // IPv6
+		ip := make([]byte, 16)
+		if _, err := io.ReadFull(conn, ip); err != nil {
+			return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read IPv6 address: %v", err)}
+		}
+		host = net.IP(ip).String()
+	default:
+		return "", 0, &socks5Error{rep: 0x08, msg: fmt.Sprintf("unsupported address type: %d", atyp)}
+	}
+
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(conn, portBuf); err != nil {
+		return "", 0, &socks5Error{rep: 0x01, msg: fmt.Sprintf("read port: %v", err)}
+	}
+	port := int(binary.BigEndian.Uint16(portBuf))
+
+	return host, port, nil
+}
+
+// socks5SendReply sends a SOCKS5 reply with the given status code.
+func socks5SendReply(conn net.Conn, status byte) {
+	reply := []byte{
+		0x05, status, 0x00, 0x01, // VER, REP, RSV, ATYP=IPv4
+		0, 0, 0, 0, // BND.ADDR
+		0, 0, // BND.PORT
+	}
+	_, _ = conn.Write(reply)
 }
 
 // removeForwardAndNotify removes a forward from the map and fires OnForwardStopped.
