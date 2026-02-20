@@ -54,6 +54,10 @@ type VPNTunnelConfig struct {
 	// The SOCKS5 proxy runs on localhost in the extension process.
 	SOCKS5Address string `json:"socks5Address,omitempty"` // e.g., "127.0.0.1:1080"
 
+	// TSSH packet MTU (separate from TUN device MTU)
+	// Zero means use default (1400). Both client and server must match.
+	TSSHMTU int `json:"trzszMTU,omitempty"`
+
 	// Shared fields
 	DNSServers     []string `json:"dnsServers,omitempty"`
 	ExcludedRoutes []string `json:"excludedRoutes,omitempty"` // CIDRs to exclude

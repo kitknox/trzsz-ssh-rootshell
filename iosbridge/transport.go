@@ -111,6 +111,10 @@ type TransportConfig struct {
 	// If zero, default behavior is unchanged.
 	InitialSerialNumber int64
 
+	// Mtu overrides the default packet MTU (1400) for KCP/QUIC.
+	// Zero means use default. Both client and server must match.
+	Mtu int
+
 	// Debug enables verbose logging
 	Debug bool
 }
@@ -331,6 +335,9 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 	}
 	if config.InitialSerialNumber > 0 {
 		opts.InitialSerialNumber = uint64(config.InitialSerialNumber)
+	}
+	if config.Mtu > 0 {
+		opts.MTU = uint16(config.Mtu)
 	}
 
 	// ROOTSHELL: Route debug/warning output through the global DebugLogger when set,

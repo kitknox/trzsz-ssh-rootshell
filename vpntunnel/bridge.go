@@ -276,6 +276,7 @@ func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
 		AliveTimeout:     24 * time.Hour,
 		HeartbeatTimeout: 3 * time.Second,
 		IntervalTime:     1 * time.Second,
+		MTU:              uint16(cfg.TSSHMTU),
 		WarningFunc: func(msg string) {
 			log.Printf("vpntunnel tssh: %s", msg)
 		},
