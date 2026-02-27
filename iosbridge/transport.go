@@ -460,6 +460,26 @@ func (t *Transport) WakeTransport() {
 	}
 }
 
+// ROOTSHELL: SuppressRekey prevents the KCP rekey timer from firing while the
+// iOS app is backgrounded. Call this when the app enters background. Without
+// this, the Go time.Ticker accumulates ticks during process suspension and
+// fires them all on resume, triggering a rekey handshake that races with
+// pktCache replay and stale bus state — causing GCM auth failures.
+func (t *Transport) SuppressRekey() {
+	if t.client != nil {
+		t.client.SuppressRekey()
+	}
+}
+
+// ROOTSHELL: ResumeRekey re-enables the KCP rekey timer after the iOS app
+// returns to foreground. Call this when the app enters foreground, BEFORE
+// calling WakeTransport().
+func (t *Transport) ResumeRekey() {
+	if t.client != nil {
+		t.client.ResumeRekey()
+	}
+}
+
 // Close closes the transport connection.
 func (t *Transport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
