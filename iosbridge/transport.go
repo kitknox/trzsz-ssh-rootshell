@@ -604,6 +604,36 @@ func (s *TransportSession) Shell() error {
 	return nil
 }
 
+// StartCommand starts a specific command (exec request) instead of an interactive shell.
+// The remote server will exec the command directly with a PTY.
+func (s *TransportSession) StartCommand(command string) error {
+	if s.closed.Load() {
+		return fmt.Errorf("session is closed")
+	}
+	if !s.started.CompareAndSwap(false, true) {
+		return fmt.Errorf("session already started")
+	}
+
+	var err error
+	s.stdin, err = s.session.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
+
+	s.stdout, err = s.session.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	if err := s.session.Start(command); err != nil {
+		return fmt.Errorf("failed to start command: %w", err)
+	}
+
+	s.startOutputForwarding()
+	s.transport.flushPendingDiscardMarker()
+	return nil
+}
+
 // Write sends input to the shell.
 // Thread-safe: uses mutex to prevent interleaving with WindowChange.
 func (s *TransportSession) Write(data []byte) error {
