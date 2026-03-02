@@ -149,13 +149,17 @@ func StopTunnel() error {
 		return nil
 	}
 
-	globalStack.close()
-	globalStack = nil
-
+	// Close TSSH client FIRST to send exit signal to tsshd before
+	// the potentially-blocking netstack teardown (wg.Wait).
+	// The client uses direct UDP (excluded from VPN routes) and
+	// doesn't depend on the netstack.
 	if globalClient != nil {
 		globalClient.Close()
 		globalClient = nil
 	}
+
+	globalStack.close()
+	globalStack = nil
 
 	if globalCB != nil {
 		globalCB.OnTunnelDisconnected("user requested stop")
