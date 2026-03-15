@@ -514,7 +514,7 @@ func (t *Transport) ResumeRekey() {
 	}
 }
 
-// Close closes the transport connection.
+// Close closes the transport connection and tells the server to shut down.
 func (t *Transport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		return nil
@@ -527,6 +527,25 @@ func (t *Transport) Close() error {
 	t.mu.Unlock()
 
 	return t.client.Close()
+}
+
+// Abandon silently disconnects without sending "close" to the server.
+// Use this when preserving the server session for future Attach().
+// The server will detect the client disappeared via keepalive timeout
+// and keep the session alive in attachable mode.
+func (t *Transport) Abandon() {
+	if !t.closed.CompareAndSwap(false, true) {
+		return
+	}
+
+	t.mu.Lock()
+	if t.session != nil {
+		_ = t.session.Close()
+	}
+	t.mu.Unlock()
+
+	// Close local resources without sending bus "close" command
+	t.client.Abandon()
 }
 
 // IsClosed returns true if the transport has been closed.
