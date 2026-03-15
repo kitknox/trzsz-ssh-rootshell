@@ -107,10 +107,6 @@ type TransportConfig struct {
 	AliveTimeoutSec     int
 	HeartbeatTimeoutSec int
 
-	// InitialSerialNumber seeds the roaming auth serial for resume across app termination.
-	// If zero, default behavior is unchanged.
-	InitialSerialNumber int64
-
 	// Mtu overrides the default packet MTU (1400) for KCP/QUIC.
 	// Zero means use default. Both client and server must match.
 	Mtu int
@@ -158,6 +154,7 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 		ClientID   int64  `json:"ClientID"`
 		ServerID   int64  `json:"ServerID"`
 		ProxyMode  string `json:"ProxyMode"`
+		MTU        int    `json:"MTU"`
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
@@ -184,6 +181,7 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 	cfg.ClientID = raw.ClientID
 	cfg.ServerID = raw.ServerID
 	cfg.ProxyMode = raw.ProxyMode
+	cfg.Mtu = raw.MTU
 
 	return cfg, nil
 }
@@ -227,6 +225,7 @@ func (c *TransportConfig) toServerInfo() *tsshd.ServerInfo {
 		ClientID:   uint64(c.ClientID),
 		ServerID:   uint64(c.ServerID),
 		ProxyMode:  c.ProxyMode,
+		MTU:        uint16(c.Mtu),
 	}
 }
 
@@ -320,9 +319,6 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		IntervalTime:     intervalTime,
 		ConnectTimeout:   connectTimeout,
 		HeartbeatTimeout: heartbeatTimeout,
-		// Use in-process pipes instead of UDP sockets.
-		// Required for iOS where UDP sockets die when the app backgrounds.
-		UseInProcessPipe: true,
 		DiscardCallback: func(discardMarker, discardedInput []byte) {
 			// Send the marker back through the session stdin so the server's
 			// discardPendingInput() finds it and clears discardPendingInputFlag.
@@ -333,11 +329,9 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 			}
 		},
 	}
-	if config.InitialSerialNumber > 0 {
-		opts.InitialSerialNumber = uint64(config.InitialSerialNumber)
-	}
+	// MTU is now on ServerInfo in upstream, set it there
 	if config.Mtu > 0 {
-		opts.MTU = uint16(config.Mtu)
+		serverInfo.MTU = uint16(config.Mtu)
 	}
 
 	// ROOTSHELL: Route debug/warning output through the global DebugLogger when set,
@@ -410,6 +404,46 @@ func (t *Transport) NewSession() (*TransportSession, error) {
 	}
 
 	t.session = ts
+	return ts, nil
+}
+
+// AttachSession creates a new session stream and attaches to an existing
+// server-side session by ID. Use this to resume a session after app restart.
+// The sessionID should have been saved from GetSessionID() on a previous session.
+func (t *Transport) AttachSession(sessionID int64, term string, rows, cols int) (*TransportSession, error) {
+	// Create a fresh session (new SMUX stream)
+	ts, err := t.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session for attach: %w", err)
+	}
+
+	// Request PTY before attach
+	if err := ts.RequestPty(term, rows, cols); err != nil {
+		_ = ts.Close()
+		return nil, fmt.Errorf("failed to request pty for attach: %w", err)
+	}
+
+	// Attach to existing session instead of Shell()
+	if err := ts.session.Attach(uint64(sessionID)); err != nil {
+		_ = ts.Close()
+		return nil, fmt.Errorf("failed to attach to session %d: %w", sessionID, err)
+	}
+
+	// Set up I/O pipes (same as Shell path)
+	ts.stdin, err = ts.session.StdinPipe()
+	if err != nil {
+		_ = ts.Close()
+		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)
+	}
+	ts.stdout, err = ts.session.StdoutPipe()
+	if err != nil {
+		_ = ts.Close()
+		return nil, fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	ts.started.Store(true)
+	ts.startOutputForwarding()
+	t.flushPendingDiscardMarker()
 	return ts, nil
 }
 
@@ -710,6 +744,12 @@ func (s *TransportSession) Wait() error {
 // GetExitCode returns the exit code from the remote command.
 func (s *TransportSession) GetExitCode() int {
 	return s.session.GetExitCode()
+}
+
+// GetSessionID returns the session ID assigned by the server.
+// This must be saved for future Attach() calls after app restart.
+func (s *TransportSession) GetSessionID() int64 {
+	return int64(s.session.GetID())
 }
 
 // IsClosed returns true if the session has been closed.
