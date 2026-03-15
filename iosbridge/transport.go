@@ -423,13 +423,8 @@ func (t *Transport) AttachSession(sessionID int64, term string, rows, cols int) 
 		return nil, fmt.Errorf("failed to request pty for attach: %w", err)
 	}
 
-	// Attach to existing session instead of Shell()
-	if err := ts.session.Attach(uint64(sessionID)); err != nil {
-		_ = ts.Close()
-		return nil, fmt.Errorf("failed to attach to session %d: %w", sessionID, err)
-	}
-
-	// Set up I/O pipes (same as Shell path)
+	// Set up I/O pipes BEFORE Attach — startSession() only starts forwarding
+	// goroutines if stdin/stdout are already set when it runs.
 	ts.stdin, err = ts.session.StdinPipe()
 	if err != nil {
 		_ = ts.Close()
@@ -439,6 +434,12 @@ func (t *Transport) AttachSession(sessionID int64, term string, rows, cols int) 
 	if err != nil {
 		_ = ts.Close()
 		return nil, fmt.Errorf("failed to get stdout pipe: %w", err)
+	}
+
+	// Attach to existing session (starts forwarding goroutines internally)
+	if err := ts.session.Attach(uint64(sessionID)); err != nil {
+		_ = ts.Close()
+		return nil, fmt.Errorf("failed to attach to session %d: %w", sessionID, err)
 	}
 
 	ts.started.Store(true)
