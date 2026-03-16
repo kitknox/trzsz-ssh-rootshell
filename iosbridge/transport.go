@@ -245,6 +245,9 @@ type Transport struct {
 	// Callback for state changes
 	stateCallback TransportStateCallback
 
+	// Agent forwarding stop channel — closed in Close() to stop the agent goroutine.
+	agentStopChan chan struct{}
+
 	// Pending discard marker to clear server-side pending input discard state.
 	pendingDiscardMarker []byte
 
@@ -529,6 +532,10 @@ func (t *Transport) Close() error {
 	}
 
 	t.mu.Lock()
+	if t.agentStopChan != nil {
+		close(t.agentStopChan)
+		t.agentStopChan = nil
+	}
 	if t.session != nil {
 		_ = t.session.Close()
 	}
