@@ -537,23 +537,19 @@ func (t *Transport) Close() error {
 	return t.client.Close()
 }
 
-// Abandon silently disconnects without sending "close" to the server.
+// Abandon silently disconnects without sending ANY signals to the server.
 // Use this when preserving the server session for future Attach().
-// The server will detect the client disappeared via keepalive timeout
-// and keep the session alive in attachable mode.
+// Does not close the session, bus stream, SMUX session, or KCP connection —
+// any of those would send FIN/close frames that the server would interpret
+// as the client explicitly disconnecting, killing the session.
+// Resources are cleaned up when the process exits.
 func (t *Transport) Abandon() {
 	if !t.closed.CompareAndSwap(false, true) {
 		return
 	}
-
-	t.mu.Lock()
-	if t.session != nil {
-		_ = t.session.Close()
-	}
-	t.mu.Unlock()
-
-	// Close local resources without sending bus "close" command
-	t.client.Abandon()
+	// Intentionally do nothing. Don't close session (sends "exit" on bus),
+	// don't close client (sends SMUX/KCP close frames).
+	// Just mark as closed and let the process die silently.
 }
 
 // IsClosed returns true if the transport has been closed.
