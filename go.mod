@@ -31,9 +31,12 @@ require (
 	github.com/trzsz/trzsz-go v1.2.1-0.20260321175259-1b4edac9bfa1
 	github.com/trzsz/tsshd v0.1.7-rc2.0.20260321223557-7918c43b0025
 	golang.org/x/crypto v0.49.0
+	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
 	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.41.0
 )
+
+replace github.com/trzsz/tsshd => /Users/kit/Development/tsshd
 
 require (
 	github.com/UserExistsError/conpty v0.1.4 // indirect
