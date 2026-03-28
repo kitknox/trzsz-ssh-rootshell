@@ -112,6 +112,10 @@ type TransportConfig struct {
 
 	// Debug enables verbose logging
 	Debug bool
+
+	// DebugLabel is a human-readable label prefixed to all debug messages
+	// from this transport (e.g., "S1 user@host"). Empty = no prefix.
+	DebugLabel string
 }
 
 // NewTransportConfig creates a new TransportConfig with default values.
@@ -316,7 +320,12 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 			// the client-side forwardInput(). This callback only receives
 			// notification of discarded input bytes.
 			if dl := getDebugLogger(); dl != nil {
-				dl.OnDebug(fmt.Sprintf("[discard] %d bytes of pending input", len(discarded)))
+				label := config.DebugLabel
+				if label != "" {
+					dl.OnDebug(fmt.Sprintf("[%s] [discard] %d bytes of pending input", label, len(discarded)))
+				} else {
+					dl.OnDebug(fmt.Sprintf("[discard] %d bytes of pending input", len(discarded)))
+				}
 			}
 		},
 	}
@@ -327,24 +336,46 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 
 	// ROOTSHELL: Route debug/warning output through the global DebugLogger when set,
 	// enabling file-based logging on iOS where stdout goes nowhere.
+	// DebugLabel is captured by closures so each transport's messages are tagged.
+	label := config.DebugLabel
 	if dl := getDebugLogger(); dl != nil {
 		opts.EnableDebugging = true
 		opts.DebugFunc = func(msec int64, msg string) {
-			dl.OnDebug(fmt.Sprintf("[tsshd %d] %s", msec, msg))
+			if label != "" {
+				dl.OnDebug(fmt.Sprintf("[%s] [tsshd] %s", label, msg))
+			} else {
+				dl.OnDebug(fmt.Sprintf("[tsshd] %s", msg))
+			}
 		}
 		opts.WarningFunc = func(msg string) {
-			dl.OnDebug(fmt.Sprintf("[tsshd WARN] %s", msg))
+			if label != "" {
+				dl.OnDebug(fmt.Sprintf("[%s] [tsshd WARN] %s", label, msg))
+			} else {
+				dl.OnDebug(fmt.Sprintf("[tsshd WARN] %s", msg))
+			}
 		}
 	} else if config.Debug {
 		opts.DebugFunc = func(msec int64, msg string) {
-			fmt.Printf("[tsshd %d] %s\n", msec, msg)
+			if label != "" {
+				fmt.Printf("[%s] [tsshd] %s\n", label, msg)
+			} else {
+				fmt.Printf("[tsshd] %s\n", msg)
+			}
 		}
 		opts.WarningFunc = func(msg string) {
-			fmt.Printf("[tsshd WARN] %s\n", msg)
+			if label != "" {
+				fmt.Printf("[%s] [tsshd WARN] %s\n", label, msg)
+			} else {
+				fmt.Printf("[tsshd WARN] %s\n", msg)
+			}
 		}
 	} else {
 		opts.WarningFunc = func(msg string) {
-			fmt.Printf("[tsshd WARN] %s\n", msg)
+			if label != "" {
+				fmt.Printf("[%s] [tsshd WARN] %s\n", label, msg)
+			} else {
+				fmt.Printf("[tsshd WARN] %s\n", msg)
+			}
 		}
 	}
 

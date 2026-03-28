@@ -173,7 +173,11 @@ func (t *Transport) EnableAgentForwarding(callback AgentCallback) error {
 				channel, _, err := newChannel.Accept()
 				if err != nil {
 					if dl := getDebugLogger(); dl != nil {
-						dl.OnDebug(fmt.Sprintf("[agent] failed to accept channel: %v", err))
+						if t.config.DebugLabel != "" {
+							dl.OnDebug(fmt.Sprintf("[%s] [agent] failed to accept channel: %v", t.config.DebugLabel, err))
+						} else {
+							dl.OnDebug(fmt.Sprintf("[agent] failed to accept channel: %v", err))
+						}
 					}
 					continue
 				}
