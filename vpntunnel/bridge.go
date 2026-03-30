@@ -26,6 +26,7 @@ package vpntunnel
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"runtime/debug"
@@ -36,6 +37,46 @@ import (
 
 	"github.com/trzsz/tsshd/tsshd"
 )
+
+// DebugLogger receives debug messages from the VPN tunnel.
+// Implement this in Swift to capture tsshd and tunnel diagnostics.
+type DebugLogger interface {
+	OnDebug(msg string)
+}
+
+var globalDebugLogger struct {
+	sync.RWMutex
+	logger DebugLogger
+}
+
+// SetDebugLogger sets the global debug logger for VPN tunnel diagnostics.
+// Call before StartTunnel(). Pass nil to disable.
+func SetDebugLogger(logger DebugLogger) {
+	globalDebugLogger.Lock()
+	defer globalDebugLogger.Unlock()
+	globalDebugLogger.logger = logger
+	if logger != nil {
+		log.SetOutput(&debugLogWriter{logger: logger})
+	} else {
+		log.SetOutput(io.Discard)
+	}
+}
+
+func getDebugLogger() DebugLogger {
+	globalDebugLogger.RLock()
+	defer globalDebugLogger.RUnlock()
+	return globalDebugLogger.logger
+}
+
+// debugLogWriter adapts a DebugLogger to io.Writer for log.SetOutput().
+type debugLogWriter struct {
+	logger DebugLogger
+}
+
+func (w *debugLogWriter) Write(p []byte) (n int, err error) {
+	w.logger.OnDebug(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
 
 const (
 	// Keep Go heap conservative inside NEPacketTunnelProvider's tight memory budget.
@@ -283,9 +324,20 @@ func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
 		AliveTimeout:     24 * time.Hour,
 		HeartbeatTimeout: 3 * time.Second,
 		IntervalTime:     1 * time.Second,
-		WarningFunc: func(msg string) {
+	}
+
+	if dl := getDebugLogger(); dl != nil {
+		opts.EnableDebugging = true
+		opts.DebugFunc = func(msec int64, msg string) {
+			dl.OnDebug(fmt.Sprintf("[vpntunnel tsshd] %s", msg))
+		}
+		opts.WarningFunc = func(msg string) {
+			dl.OnDebug(fmt.Sprintf("[vpntunnel tsshd WARN] %s", msg))
+		}
+	} else {
+		opts.WarningFunc = func(msg string) {
 			log.Printf("vpntunnel tssh: %s", msg)
-		},
+		}
 	}
 
 	c, err := tsshd.NewSshUdpClient(opts)
