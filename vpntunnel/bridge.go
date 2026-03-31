@@ -151,6 +151,18 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 		tcpDial = d
 		udpDial = d
 
+		// Auto-resolve TUN MTU from transport's actual max datagram size.
+		// This accounts for all overhead (encryption, FEC, protocol headers, channel ID).
+		if cfg.MTU <= 0 {
+			if maxDG := int(c.GetMaxDatagramSize()); maxDG > 0 {
+				cfg.MTU = maxDG
+				log.Printf("vpntunnel: auto-resolved TUN MTU=%d from transport max datagram size", cfg.MTU)
+			} else {
+				cfg.MTU = 1500
+				log.Printf("vpntunnel: transport returned 0 max datagram size, falling back to TUN MTU=%d", cfg.MTU)
+			}
+		}
+
 	case "ssh":
 		// Use SOCKS5 proxy for TCP; no native UDP
 		if cfg.SOCKS5Address == "" {
@@ -161,6 +173,11 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 
 	default:
 		return fmt.Errorf("vpntunnel: unsupported transport: %s", cfg.TransportType)
+	}
+
+	// Final fallback: if MTU is still unset (SSH mode or auto-resolve failed), default to 1500.
+	if cfg.MTU <= 0 {
+		cfg.MTU = 1500
 	}
 
 	ts, err := newTunnelStack(cfg, tcpDial, udpDial, stats)
@@ -287,6 +304,17 @@ func GetStatus() string {
 		transportType = cfg.TransportType
 	}
 	return stats.toStatus(connected, transportType)
+}
+
+// GetEffectiveMTU returns the resolved TUN device MTU after StartTunnel.
+// Returns 0 if the tunnel is not running.
+func GetEffectiveMTU() int {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	if globalConfig != nil {
+		return globalConfig.MTU
+	}
+	return 0
 }
 
 // connectTSSH establishes a tsshd client connection using the config parameters.

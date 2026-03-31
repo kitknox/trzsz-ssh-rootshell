@@ -73,8 +73,7 @@ func ParseConfig(configJSON string) (*VPNTunnelConfig, error) {
 	if cfg.TransportType != "ssh" && cfg.TransportType != "tssh" {
 		return nil, fmt.Errorf("vpntunnel: invalid transport type: %q", cfg.TransportType)
 	}
-	if cfg.MTU <= 0 {
-		cfg.MTU = 1500
-	}
+	// MTU <= 0 means "auto-resolve from transport" for TSSH.
+	// The default (1500) is applied in StartTunnel after auto-resolution.
 	return &cfg, nil
 }
