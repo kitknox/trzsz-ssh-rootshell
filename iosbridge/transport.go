@@ -476,18 +476,6 @@ func (t *Transport) AttachSession(sessionID int64, term string, rows, cols int) 
 	return ts, nil
 }
 
-// ROOTSHELL: WakeTransport sends an immediate keepalive to accelerate session
-// resumption after the iOS app returns from background. This avoids the up to
-// 3× intervalTime delay of waiting for keepAlive()'s normal cycle. The keepalive
-// packet triggers onClientActive() on the server, immediately clearing the
-// timeout and resuming output delivery.
-// Best-effort: if the bus is dead, this is a no-op.
-func (t *Transport) WakeTransport() {
-	if t.client != nil {
-		t.client.SendKeepAlive()
-	}
-}
-
 // Close closes the transport connection and tells the server to shut down.
 func (t *Transport) Close() error {
 	if !t.closed.CompareAndSwap(false, true) {
