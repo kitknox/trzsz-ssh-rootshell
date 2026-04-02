@@ -386,12 +386,6 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 
 	transport.client = client
 
-	// In attachable mode (ClientID == 0), mark the client so forwardInput
-	// won't send CloseWrite on exit, preserving the server session.
-	if config.ClientID == 0 {
-		client.SetAttachable(true)
-	}
-
 	return transport, nil
 }
 
