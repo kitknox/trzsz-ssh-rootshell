@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -146,9 +147,6 @@ func writeDebugLog(msec int64, host, log string) {
 		}
 		if _, err := debugLogFile.WriteString(line); err != nil {
 			return false, fmt.Errorf("write debug log to [%s] failed: %v", debugLogFileName, err)
-		}
-		if err := debugLogFile.Sync(); err != nil {
-			return false, fmt.Errorf("sync debug log to [%s] failed: %v", debugLogFileName, err)
 		}
 		return true, nil
 	}()
@@ -569,4 +567,33 @@ func getOpenSSH() (string, int, int, error) {
 	}
 
 	return "", 0, 0, fmt.Errorf("no usable ssh found in PATH")
+}
+
+func lookupHostWithTimeout(host string, timeout time.Duration) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	return addrs, nil
+}
+
+func wildcardToRegexp(pattern string) string {
+	var buf strings.Builder
+	for _, c := range pattern {
+		switch c {
+		case '*':
+			buf.WriteString(".*")
+		case '?':
+			buf.WriteByte('.')
+		case '(', ')', '[', ']', '{', '}', '.', '+', ',', '-', '^', '$', '|', '\\':
+			buf.WriteByte('\\')
+			buf.WriteRune(c)
+		default:
+			buf.WriteRune(c)
+		}
+	}
+	return buf.String()
 }

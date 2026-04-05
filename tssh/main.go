@@ -59,10 +59,12 @@ func background(args *sshArgs, dest string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
+	exePath := getExePath(newArgs[0])
 
 	sleepTime := time.Duration(0)
 	for {
-		cmd := exec.Command(newArgs[0], newArgs[1:]...)
+		cmd := exec.Command(exePath, newArgs[1:]...)
+		cmd.Args = newArgs
 		cmd.Env = env
 		cmd.Stderr = os.Stderr
 
@@ -84,6 +86,13 @@ func background(args *sshArgs, dest string) (bool, error) {
 			sleepTime = 0
 		}
 	}
+}
+
+func getExePath(defaultPath string) string {
+	if path, err := os.Executable(); err == nil {
+		return path
+	}
+	return defaultPath
 }
 
 // replaceOrAppendDest returns a new args slice where the destination is replaced or appended.
@@ -127,9 +136,11 @@ func runWithReconnect(args *sshArgs, dest string) (err error) {
 	if err != nil {
 		return err
 	}
+	exePath := getExePath(newArgs[0])
 
 	for {
-		cmd := exec.Command(newArgs[0], newArgs[1:]...)
+		cmd := exec.Command(exePath, newArgs[1:]...)
+		cmd.Args = newArgs
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -170,7 +181,7 @@ func waitForEnter(code int) bool {
 
 	state, err := makeStdinRaw()
 	if err != nil {
-		fmt.Scanln()
+		_, _ = fmt.Scanln()
 		return true
 	}
 	defer resetStdin(state)
@@ -260,9 +271,6 @@ func TsshMain(argv []string) int {
 		enableDebugLogging = true
 		debug("tssh version: %s", getTsshVersion())
 	}
-
-	// init iterm2 session if necessary
-	initIterm2Session()
 
 	// cleanup on exit
 	defer cleanupOnExit()
@@ -527,7 +535,7 @@ func openSession(sshConn *sshConnection) (err error) {
 	}
 
 	// send and set env
-	term, err := sendAndSetEnv(sshConn)
+	term, err := sendAndSetEnv(sshConn.param.args, sshConn.session)
 	if err != nil {
 		return err
 	}
@@ -541,12 +549,6 @@ func openSession(sshConn *sshConnection) (err error) {
 	width, height, err := getTerminalSize()
 	if err != nil {
 		return fmt.Errorf("get terminal size for [%s] failed: %v", sshConn.param.args.Destination, err)
-	}
-	if term == "" {
-		term = os.Getenv("TERM")
-		if term == "" {
-			term = "xterm-256color"
-		}
 	}
 	if err := sshConn.session.RequestPty(term, height, width, ssh.TerminalModes{}); err != nil {
 		return fmt.Errorf("request pty for [%s] failed: %v", sshConn.param.args.Destination, err)

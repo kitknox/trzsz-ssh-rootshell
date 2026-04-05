@@ -1,4 +1,4 @@
-# trzsz-ssh ( tssh ) - 满足您所需的 ssh 客户端
+## trzsz-ssh(tssh): 高度兼容 OpenSSH 并提供丰富扩展功能的 SSH 客户端
 
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg?style=flat)](https://choosealicense.com/licenses/mit/)
 [![GitHub Release](https://img.shields.io/github/v/release/trzsz/trzsz-ssh)](https://github.com/trzsz/trzsz-ssh/releases)
@@ -9,7 +9,7 @@ trzsz-ssh ( tssh ) 设计为 ssh 客户端的直接替代品，提供与 openssh
 
 trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用于高延迟的弱网连接，切换网络、休眠与唤醒都不会掉线，让 ssh 会话永远保持。
 
-## 为什么做
+### 为什么做
 
 - 服务器太多，记不住所有别名，`tssh` 内置登录界面，支持搜索和选择服务器登录。
 
@@ -23,7 +23,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - `tssh` 与 [tsshd](https://github.com/trzsz/tsshd) 类似于 mosh，解决了部分 mosh 的问题，例如 SSH 转发和 ProxyJump 等。
 
-## 安装方法
+### 安装方法
 
 **_客户端安装 `trzsz-ssh ( tssh )` 的方法如下（ 任选其一 ）：_**
 
@@ -50,7 +50,6 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   <details><summary><code>brew install trzsz-ssh</code></summary>
 
   ```sh
-  brew update
   brew install trzsz-ssh
   ```
 
@@ -138,7 +137,11 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   <details><summary><code>go install github.com/trzsz/trzsz-ssh/cmd/tssh@latest</code></summary>
 
   ```sh
+  # 最新发布版本
   go install github.com/trzsz/trzsz-ssh/cmd/tssh@latest
+
+  # 最新开发版本（ main 分支 ）
+  go install github.com/trzsz/trzsz-ssh/cmd/tssh@main
   ```
 
   安装后，`tssh` 程序一般位于 `~/go/bin/` 目录下（ Windows 一般在 `C:\Users\your_name\go\bin\` ）。
@@ -178,11 +181,11 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   </details>
 
-## 登录界面
+### 登录界面
 
 - 使用之前，需要配置好 `~/.ssh/config` ( Windows 是 `C:\Users\xxx\.ssh\config`, `xxx` 换成用户名 )。
 
-- 关于如何配置 `~/.ssh/config`，请参考 [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html) ( `Match` 暂时要参考下文配置 `UseOpenSSHConfig` 才支持 )，或参考 tssh wiki [SSH基本配置](https://github.com/trzsz/trzsz-ssh/wiki/SSH%E5%9F%BA%E6%9C%AC%E9%85%8D%E7%BD%AE)。
+- 关于如何配置 `~/.ssh/config`，请参考 [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html) ( `Match` 中的 `exec` 暂时要参考下文配置 `UseOpenSSHConfig` 才支持 )，或参考 tssh wiki [SSH基本配置](https://github.com/trzsz/trzsz-ssh/wiki/SSH%E5%9F%BA%E6%9C%AC%E9%85%8D%E7%BD%AE)。
 
 - 直接无参数运行 `tssh` 命令就会打开登录界面，或者有除目标机器外的其他参数也会打开登录界面。
 
@@ -212,7 +215,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   | Open Tabs | Ctrl+T                          | t T          | 新 Tab 批量登录 |
   | Open Pane | Ctrl+P                          | p P          | 分屏批量登录    |
 
-## 主题风格
+### 主题风格
 
 - `tssh` 支持多种主题风格，在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中配置 `PromptThemeLayout` 选用。欢迎一起来创造更多更好看的。
 
@@ -220,7 +223,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 请为你喜欢的主题风格[❤️投票❤️](https://github.com/trzsz/trzsz-ssh/issues/75)，得票数最高的主题风格将会在下个版本被设置为默认主题。
 
-### tiny 小巧风
+#### tiny 小巧风
 
 - 在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中配置 `PromptThemeLayout = tiny` 选用 `tiny 小巧风`。
   ![tssh tiny](https://trzsz.github.io/images/tssh_tiny.gif)
@@ -280,14 +283,14 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   </details>
 
-### simple 简约风
+#### simple 简约风
 
 - 在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中配置 `PromptThemeLayout = simple` 选用 `simple 简约风`。
   ![tssh simple](https://trzsz.github.io/images/tssh_simple.gif)
 
 - `simple 简约风` 支持的颜色配置项、默认值和颜色枚举，和 `tiny 小巧风` 完全相同，请参考前文。
 
-### table 表格风
+#### table 表格风
 
 - 在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中配置 `PromptThemeLayout = table` 选用 `table 表格风`。
   ![tssh table](https://trzsz.github.io/images/tssh_table.gif)
@@ -320,7 +323,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 支持的颜色枚举请参考 [lipgloss](https://github.com/charmbracelet/lipgloss#colors)，除了 `help_tips` 和 `shortcuts` 与前文 `tiny 小巧风` 相同。
 
-## 支持 trzsz
+### 支持 trzsz
 
 - 在服务器上要安装 [trzsz](https://trzsz.github.io/cn/)，才能使用 `trz / tsz` 上传和下载，可任选其一安装：[Go 版](https://trzsz.github.io/cn/go)（ ⭐ 推荐 ）、[Py 版](https://trzsz.github.io/cn/)、[Js 版](https://trzsz.github.io/cn/js)。
 
@@ -364,7 +367,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 ![tssh trzsz](https://trzsz.github.io/images/tssh_trzsz.gif)
 
-## 支持 zmodem
+### 支持 zmodem
 
 - 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableZmodem` 为 `Yes` 启用 `rz / sz` 功能。
 
@@ -405,7 +408,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   tssh -t --client --zmodem --download-path /tmp/ xxx_server 'sz /path/to/file1 /path/to/file2'
   ```
 
-## 支持 scp sftp
+### 支持 scp sftp
 
 - 使用了 `tssh` 记住密码的功能，登录时不用手工输入密码了，`scp` 和 `sftp` 也一样可以不用手工输入密码。
 
@@ -420,7 +423,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   alias tsftp='sftp -S tssh'
   ```
 
-## 批量登录
+### 批量登录
 
 - 支持在 `iTerm2`（ 要开启 [Python API](https://iterm2.com/python-api-auth.html)，但不需要`Allow all apps to connect` ），`tmux` 和 `Windows Terminal` 中一次选择多台服务器，批量登录，并支持批量执行预先指定的命令。
 
@@ -439,7 +442,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 ![tssh batch](https://trzsz.github.io/images/tssh_batch.gif)
 
-## 分组标签
+### 分组标签
 
 - 如果服务器数量很多，分组标签 `GroupLabels` 可以在按 `/` 搜索时，快速找到目标服务器。
 
@@ -460,7 +463,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
       #!! GroupLabels label4 group5
   ```
 
-## 自动交互
+### 自动交互
 
 - 支持类似 `expect` 的自动交互功能，在登录服务器之后，自动匹配服务器的输出，然后自动输入。
 
@@ -531,7 +534,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 如果不知道 `ExpectPattern2` 如何配置，可以先将 `ExpectCount` 配置为 `2`，然后使用 `tssh --debug` 登录，就会看到 `expect` 捕获到的输出，可以直接复制输出的最后部分来配置 `ExpectPattern2`。把 `2` 换成其他任意的数字也适用。
 
-## 记住密码
+### 记住密码
 
 - 推荐使用公钥认证登录，可参考 openssh 的文档，或者参考 tssh wiki [公钥认证登录](https://github.com/trzsz/trzsz-ssh/wiki/%E5%85%AC%E9%92%A5%E8%AE%A4%E8%AF%81%E7%99%BB%E5%BD%95)。
 
@@ -600,7 +603,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - `记住密码`之后还提示输入密码？可能服务器的认证方式是 `keyboard interactive`，请参考下文`记住答案`。
 
-## 记住答案
+### 记住答案
 
 - 除了私钥和密码，还有一种登录方式，英文叫 keyboard interactive ，是服务器返回一些问题，客户端提供正确的答案就能登录，很多自定义的一次性密码就是利用这种方式实现的。
 
@@ -671,7 +674,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
       #!! CtrlExpectSendEncOtp1 77b4ce85d0...  # 或者配置 tssh --enc-secret 得到的密文串
   ```
 
-## 个性配置
+### 个性配置
 
 - 支持在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf`，Windows 是 `C:\Users\your_name\.tssh.conf` ）中进行以下自定义配置：
 
@@ -718,7 +721,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   UseOpenSSHConfig = Yes
   ```
 
-## 配置注释
+### 配置注释
 
 - `tssh` 配置中的注释基本与 `openssh` 一致，额外做了一些扩展支持，详见下表：
 
@@ -733,7 +736,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 - `Key Value # Comment` 配置（没有 `=` 号），`openssh` 有些情况认为 `#` 后的内容是注释，有些情况认为不是注释；`tssh` 一律认为 `#` 后的内容是注释。
 - `Key=Value # Comment` 配置（有 `=` 号），`openssh` 有些情况认为 `#` 后的内容是注释，有些情况认为不是注释；`tssh` 一律认为 `#` 后的内容不是注释。
 
-## Wayland 集成
+### Wayland 集成
 
 - 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableWaypipe` 为 `Yes` 启用 Wayland (waypipe) 集成功能。
 
@@ -760,7 +763,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
     #!! WaypipeServerOption -c lz4
   ```
 
-## 剪贴板集成
+### 剪贴板集成
 
 - 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableOSC52` 为 `Yes` 启用剪贴板集成功能。
 
@@ -774,7 +777,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 在 Linux 系统，剪贴板集成功能需要安装 `xclip` 或 `xsel` 命令。
 
-## SSH 控制台
+### SSH 控制台
 
 - `tssh` 控制台是类似 OpenSSH escape sequences 的功能，计划提供更友好、更强大的 SSH 控制功能。目前已支持的功能有：
 
@@ -794,7 +797,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
     #!! ConsoleEscapeTime 1
   ```
 
-## 其他功能
+### 其他功能
 
 - 运行 `tssh --enc-secret`，输入密码或答案，可得到用于配置的密文（ 相同密码每次运行结果不同 ）。
 
@@ -851,7 +854,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
     #!! DnsSrvName myhost.mydomain.com
   ```
 
-## 重连模式
+### 重连模式
 
 - 在前台模式（未用 `-f`）下，使用 `--reconnect` 会在程序退出后询问重启 tssh 进程并重新登录到远程服务器。
 
@@ -859,7 +862,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - **注意：** `--reconnect` 仅会重启 tssh 进程并重登录；**不会恢复之前的 SSH 会话**。如需恢复已有的 SSH 会话，请使用下面的 UDP 模式。
 
-## UDP 模式
+### UDP 模式
 
 - 在服务器上安装 [tsshd](https://github.com/trzsz/tsshd?tab=readme-ov-file#installation)，使用 `tssh --udp xxx` 登录服务器（对延迟敏感可指定 `--kcp` 选项），或者在 `~/.ssh/config` 中如下配置以省略 `--udp` 或 `--kcp` 选项：
 
@@ -874,7 +877,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - `tsshd` 进程会随机侦听一个 61001 到 61999 之间的 UDP 端口（可通过 `TsshdPort` 配置自定义），并将其端口和几个密钥通过 ssh 通道发回给 `tssh` 进程。登录的 ssh 连接会被关闭，然后 `tssh` 进程通过 UDP 与 `tsshd` 进程通讯。
 
-## UDP 配置
+### UDP 配置
 
 ```
 Host xxx
@@ -910,7 +913,7 @@ Host xxx
 
 - `UdpMTU`: 设置 UDP 数据包的最大传输单元（MTU），默认值为 1400。
 
-## UDP 端口转发
+### UDP 端口转发
 
 使用 UDP 模式时，支持 UDP 端口转发。
 
@@ -944,7 +947,7 @@ Host xxx
 
 - `ForwardUdpTimeout`: 设置 UDP 转发会话的空闲超时时间。在指定时间内无数据收发时将自动清理对应的转发会话以释放资源。默认 5 分钟。
 
-## 故障排除
+### 故障排除
 
 - 在旧版本 Warp 终端，分块 Blocks 的功能需要将 `tssh` 重命名为 `ssh`，推荐建个软链接（ 对更新友好 ）：
 
@@ -980,10 +983,10 @@ Host xxx
 
   - 可以在出错配置项中加上前缀 `#!!`，标准 `ssh` 会将它当作注释，而 `tssh` 则会认为它是有效配置之一。
 
-## 联系方式
+### 联系方式
 
 有什么问题可以发邮件给作者 <lonnywong@qq.com>，也可以提 [Issues](https://github.com/trzsz/trzsz-ssh/issues) 。欢迎加入 QQ 群：318578930。
 
-## 赞助打赏
+### 赞助打赏
 
 [❤️ 赞助 trzsz ❤️](https://github.com/trzsz)，请作者喝杯咖啡 ☕ ? 谢谢您们的支持！
