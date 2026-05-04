@@ -41,23 +41,80 @@ import (
 	"github.com/trzsz/go-socks5"
 )
 
-func listenOnLocalTCP(gateway bool, addr *string, port, name string) (listeners []net.Listener) {
+// OpenSSH's default StreamLocalBindMask.
+const defaultStreamLocalBindMask = 0177
+
+// streamLocalBindMask returns the StreamLocalBindMask for the given ssh args,
+// falling back to OpenSSH's default when unset or invalid.
+func streamLocalBindMask(args *sshArgs) int {
+	v := getOptionConfig(args, "StreamLocalBindMask")
+	if v == "" {
+		return defaultStreamLocalBindMask
+	}
+	mask, err := strconv.ParseInt(v, 8, 32)
+	if err != nil || mask < 0 || mask > 0777 {
+		warning("invalid StreamLocalBindMask [%s], using default 0177", v)
+		return defaultStreamLocalBindMask
+	}
+	return int(mask)
+}
+
+// unlinkStaleUnixSocket honors StreamLocalBindUnlink for local unix sockets.
+// Missing paths are a no-op. Non-socket files are refused. Socket files are
+// removed and a debug log is emitted.
+func unlinkStaleUnixSocket(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("refusing to unlink non-socket path: %s", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	debug("unlinked existing unix socket [%s] per StreamLocalBindUnlink", path)
+	return nil
+}
+
+type cleanupListener struct {
+	net.Listener
+	cleanup func() error
+}
+
+func (l *cleanupListener) Close() error {
+	return l.cleanup()
+}
+
+func listenOnLocalTCP(gateway bool, addr *string, port, name string, unlinkUnix bool, bindMask int) (listeners []net.Listener) {
 	listen := func(network, address string) {
+		if unlinkUnix && network == "unix" {
+			if err := unlinkStaleUnixSocket(address); err != nil {
+				warning("%s unlink [%s] failed: %v", name, address, err)
+				return
+			}
+		}
+
 		listener, err := net.Listen(network, address)
 		if err != nil {
 			warning("%s listen on local [%s] [%s] failed: %v", name, network, address, err)
-		} else {
-			debug("%s listen on local [%s] [%s] success", name, network, address)
-			listeners = append(listeners, listener)
-			addOnCloseFunc(func() {
-				_ = listener.Close()
-				if network == "unix" {
-					if err := os.Remove(address); err != nil {
-						debug("remove unix socket [%s] failed: %v", address, err)
-					}
-				}
-			})
+			return
 		}
+
+		if network == "unix" {
+			mode := os.FileMode(0666) &^ os.FileMode(bindMask)
+			if err := os.Chmod(address, mode); err != nil {
+				warning("%s chmod unix socket [%s] to %#o failed: %v", name, address, mode, err)
+			}
+			listener = &cleanupListener{listener, newFileUnlinker(address, listener)}
+		}
+
+		debug("%s listen on local [%s] [%s] success", name, network, address)
+		listeners = append(listeners, listener)
+		addOnCloseFunc(func() { _ = listener.Close() })
 	}
 
 	if addr == nil && gateway || addr != nil && (*addr == "" || *addr == "*") {
@@ -127,12 +184,12 @@ func (d sshResolver) Resolve(ctx context.Context, name string) (context.Context,
 	return ctx, []byte{}, nil
 }
 
-func dynamicForward(client SshClient, b *bindCfg, gateway bool, timeout time.Duration) {
+func dynamicForward(sshConn *sshConnection, b *bindCfg, gateway bool, timeout time.Duration, unlinkUnix bool, bindMask int) {
 	var dialError = errors.New("DIAL_ERROR_" + uuid.NewString())
 	server, err := socks5.New(&socks5.Config{
 		Resolver: &sshResolver{},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := client.DialTimeout(network, addr, timeout)
+			conn, err := sshConn.client.DialTimeout(network, addr, timeout)
 			if err != nil {
 				if reason := forwardDeniedReason(err, network); reason != "" {
 					warning("The dynamic forwarding [%v] was denied. %s", b, reason)
@@ -151,7 +208,7 @@ func dynamicForward(client SshClient, b *bindCfg, gateway bool, timeout time.Dur
 	}
 
 	name := fmt.Sprintf("dynamic forwarding [%v]", b)
-	for _, listener := range listenOnLocalTCP(gateway, b.addr, strconv.Itoa(b.port), name) {
+	for _, listener := range listenOnLocalTCP(gateway, b.addr, strconv.Itoa(b.port), name, unlinkUnix, bindMask) {
 		go func(listener net.Listener) {
 			defer func() { _ = listener.Close() }()
 			for {
@@ -192,7 +249,7 @@ func dynamicForward(client SshClient, b *bindCfg, gateway bool, timeout time.Dur
 	}
 }
 
-func localForwardTCP(sshConn *sshConnection, f *forwardCfg, gateway bool, timeout time.Duration) {
+func localForwardTCP(sshConn *sshConnection, f *forwardCfg, gateway bool, timeout time.Duration, unlinkUnix bool, bindMask int) {
 	var remoteNet, remoteAddr string
 	if f.destPort == -1 && strings.HasPrefix(f.destHost, "/") {
 		remoteNet = "unix"
@@ -203,7 +260,7 @@ func localForwardTCP(sshConn *sshConnection, f *forwardCfg, gateway bool, timeou
 	}
 
 	name := fmt.Sprintf("local forwarding [%v]", f)
-	for _, listener := range listenOnLocalTCP(gateway, f.bindAddr, strconv.Itoa(f.bindPort), name) {
+	for _, listener := range listenOnLocalTCP(gateway, f.bindAddr, strconv.Itoa(f.bindPort), name, unlinkUnix, bindMask) {
 		go func(listener net.Listener) {
 			defer func() { _ = listener.Close() }()
 			for {

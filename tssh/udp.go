@@ -307,6 +307,16 @@ func startTsshdServer(args *sshArgs, tcpClient SshClient, tsshdCmd string) (*tss
 		return nil, fmt.Errorf("new session failed: %v", err)
 	}
 	defer func() { _ = session.Close() }()
+
+	// Some Windows SSH servers treat a missing stdin as EOF, which may
+	// cause the remote command to exit prematurely and prevent tsshd
+	// from starting. Attach a stdin pipe to avoid this.
+	serverIn, err := session.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe failed: %v", err)
+	}
+	defer func() { _ = serverIn.Close() }()
+
 	serverOut, err := session.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe failed: %v", err)
@@ -331,17 +341,14 @@ func startTsshdServer(args *sshArgs, tcpClient SshClient, tsshdCmd string) (*tss
 
 	if err := session.Wait(); err != nil {
 		var builder strings.Builder
+		fmt.Fprintf(&builder, "session wait failed: %v", err)
 		if outMsg, _ := readConsoleOutput(serverOut); outMsg != "" {
+			builder.WriteByte('\n')
 			builder.WriteString(outMsg)
 		}
 		if errMsg, _ := readConsoleOutput(serverErr); errMsg != "" {
-			if builder.Len() > 0 {
-				builder.WriteString("\n")
-			}
+			builder.WriteByte('\n')
 			builder.WriteString(errMsg)
-		}
-		if builder.Len() == 0 {
-			fmt.Fprintf(&builder, "session wait failed: %v", err)
 		}
 		return nil, fmt.Errorf("%s\r\n%s", builder.String(),
 			"\033[0;36mHint:\033[0m Have you installed tsshd on your server? You may need to specify the path to tsshd.")
