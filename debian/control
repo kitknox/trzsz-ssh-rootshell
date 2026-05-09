@@ -1,5 +1,5 @@
 Source: tssh
-Section: utils
+Section: net
 Priority: optional
 Maintainer: Lonny Wong <lonnywong@qq.com>
 Build-Depends: debhelper (>=9),
