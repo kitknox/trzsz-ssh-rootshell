@@ -25,7 +25,7 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
 ### Installation
 
-**_Here is how to install `trzsz-ssh (tssh)` on the client side (choose one):_**
+> 💡 **Note**: The package is named `trzsz-ssh` in Homebrew, while it’s usually named `tssh` elsewhere.
 
 - Install with scoop / winget / choco on Windows
 
@@ -91,7 +91,7 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
   <details><summary><code>sudo dnf install tssh</code></summary>
 
   ```sh
-  sudo dnf copr enable @trzsz/tssh
+  sudo dnf copr enable @trzsz/trzsz
   sudo dnf install tssh
   ```
 
@@ -140,6 +140,24 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
   ```sh
   crew install tssh
+  ```
+
+  </details>
+
+- Install with pixi / conda / mamba from [conda-forge](https://github.com/conda-forge/tssh-feedstock)
+
+  <details><summary><code>pixi global install tssh</code> / <code>conda install tssh</code> / <code>mamba install tssh</code></summary>
+
+  ```sh
+  pixi global install tssh
+  ```
+
+  ```sh
+  conda install -c conda-forge tssh
+  ```
+
+  ```sh
+  mamba install -c conda-forge tssh
   ```
 
   </details>
