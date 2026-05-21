@@ -250,7 +250,6 @@ type Transport struct {
 
 	// Agent forwarding stop channel — closed in Close() to stop the agent goroutine.
 	agentStopChan chan struct{}
-
 }
 
 // TransportStateCallback receives transport state changes.
@@ -539,6 +538,15 @@ func (t *Transport) IsTimeout() bool {
 // Returns nil if no reconnection error occurred.
 func (t *Transport) GetLastReconnectError() error {
 	return t.client.GetLastReconnectError()
+}
+
+// SetKeepPendingInput controls whether terminal input typed during a transport
+// timeout is kept and delivered after reconnect. The upstream default is false.
+func (t *Transport) SetKeepPendingInput(keep bool) error {
+	if t.client == nil {
+		return fmt.Errorf("transport not connected")
+	}
+	return t.client.SetKeepPendingInput(keep)
 }
 
 // TransportSession represents a shell session over the transport.
