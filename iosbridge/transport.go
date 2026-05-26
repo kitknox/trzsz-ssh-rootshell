@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -250,6 +251,22 @@ type Transport struct {
 
 	// Agent forwarding stop channel — closed in Close() to stop the agent goroutine.
 	agentStopChan chan struct{}
+
+	// Stream-local (Unix-socket) remote forwarders, keyed by remote
+	// path. Populated by EnableStreamLocalForwarding, torn down in
+	// Close. See iosbridge/streamlocal.go for full lifecycle.
+	streamLocalForwarders map[string]*streamLocalForwarder
+
+	// Per-accepted-connection handle table for stream-local channels.
+	// Keys are int64 references handed to the Swift side via
+	// StreamLocalCallback.OnAccept; values are the raw net.Conns that
+	// StreamLocalRead/Write/Close drive.
+	streamLocalChannels map[int64]net.Conn
+
+	// Monotonically increasing counter for stream-local channel refs.
+	// Accessed via atomic ops so the registration goroutine doesn't
+	// need to hold the transport mutex just to mint a fresh id.
+	nextStreamLocalRef int64
 }
 
 // TransportStateCallback receives transport state changes.
@@ -484,6 +501,11 @@ func (t *Transport) Close() error {
 		_ = t.session.Close()
 	}
 	t.mu.Unlock()
+
+	// Tear down any active streamlocal forwarders and accepted
+	// channels. Done outside the lock above because net.Conn.Close
+	// can block on Network.framework's underlying connection state.
+	t.closeAllStreamLocal()
 
 	return t.client.Close()
 }
