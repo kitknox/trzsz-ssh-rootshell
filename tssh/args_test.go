@@ -60,11 +60,13 @@ func TestSshArgs(t *testing.T) {
 	assertArgsEqual("-f", sshArgs{Background: true})
 	assertArgsEqual("-s", sshArgs{Subsystem: true})
 	assertArgsEqual("-N", sshArgs{NoCommand: true})
+	assertArgsEqual("-n", sshArgs{NoStdin: true})
 	assertArgsEqual("-gfN -T", sshArgs{Gateway: true, Background: true, NoCommand: true, DisableTTY: true})
 
 	assertArgsEqual("-X", sshArgs{X11Forward: true})
 	assertArgsEqual("-x", sshArgs{NoX11Forward: true})
 	assertArgsEqual("-Y", sshArgs{X11Trusted: true})
+	assertArgsEqual("-S none", sshArgs{ControlPath: "none"})
 
 	assertArgsEqual("-p1022", sshArgs{Port: 1022})
 	assertArgsEqual("-p 2049", sshArgs{Port: 2049})
@@ -92,6 +94,7 @@ func TestSshArgs(t *testing.T) {
 
 	assertArgsEqual("--udp", sshArgs{UDP: true})
 	assertArgsEqual("--kcp", sshArgs{KCP: true})
+	assertArgsEqual("--attach", sshArgs{Attach: true})
 	assertArgsEqual("--tsshd-path /usr/bin/tsshd", sshArgs{TsshdPath: "/usr/bin/tsshd"})
 	assertArgsEqual("--tsshd-port 10000-11000", sshArgs{TsshdPort: "10000-11000"})
 

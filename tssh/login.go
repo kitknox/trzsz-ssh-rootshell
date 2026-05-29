@@ -367,6 +367,7 @@ func execProxyCommand(param *sshParam) (net.Conn, string, error) {
 	if err != nil {
 		return nil, command, err
 	}
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil, command, err
 	}
@@ -757,7 +758,7 @@ func keepAlive(sshConn *sshConnection) {
 				if aliveTimeout > 0 && time.Now().UnixMilli()-lastServerAliveTime.Load() > aliveTimeout {
 					ticker.Stop()
 					sshConn.forceExit(kExitCodeKeepAlive, fmt.Sprintf(
-						"Exit due to keep alive timeout [%ds], ServerAliveInterval [%d], ServerAliveCountMax [%d]",
+						"keep-alive timeout [%ds], ServerAliveInterval [%d], ServerAliveCountMax [%d]",
 						aliveTimeout/1000, serverAliveInterval, serverAliveCountMax))
 					return
 				}

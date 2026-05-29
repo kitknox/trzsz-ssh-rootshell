@@ -37,6 +37,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+var wantExit atomic.Bool
+
 type menuItem struct {
 	key    string
 	label  string
@@ -89,7 +91,7 @@ func (m *menuModel) Init() tea.Cmd {
 
 func (m *menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch s := msg.String(); s {
 		case "ctrl+c", "esc", "q":
 			m.quitting = true
@@ -208,11 +210,24 @@ func runConsole(escapeChar byte, writer io.WriteCloser, sshConn *sshConnection) 
 		exiting.Store(true)
 		go func() {
 			<-quitted
-			sshConn.forceExit(kExitCodeConsoleKill, fmt.Sprintf("Exit due to user actions in the console or entered the ssh escape sequences ( %s. )", char))
+			wantExit.Store(true)
+			sshConn.forceExit(kExitCodeConsoleKill, fmt.Sprintf("user action in the console or entering the escape sequences ( %s. )", char))
 		}()
 		model.quitting = true
 		return model, tea.Quit
 	}})
+
+	if sshConn.param.args.Attach || strings.ToLower(getExOptionConfig(sshConn.param.args, "UdpSessionAttach")) == "yes" {
+		model.items = append(model.items, &menuItem{"d", getText("console/detach"), func() (tea.Model, tea.Cmd) {
+			exiting.Store(true)
+			go func() {
+				<-quitted
+				sshConn.forceExit(kExitCodeConsoleKill, fmt.Sprintf("user action in the console or entering the escape sequence ( %sd )", char))
+			}()
+			model.quitting = true
+			return model, tea.Quit
+		}})
+	}
 
 	teaOpts, cancelReader := newTeaOptions(func(buf []byte) {
 		if enableDebugLogging {

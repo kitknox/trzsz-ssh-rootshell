@@ -58,6 +58,10 @@ func forwardInput(reader io.Reader, writer io.WriteCloser, win bool, escapeChar 
 		debug("ssh session stdin forward completed")
 	}()
 
+	if sshConn.param.args.NoStdin {
+		return
+	}
+
 	var enterPressedFlag bool
 	var enterPressedTime time.Time
 
@@ -195,7 +199,7 @@ func getEscapeConfig(args *sshArgs) (byte, time.Duration) {
 		} else if len(escCh) == 1 {
 			b := escCh[0]
 			switch b {
-			case 'j', 'k', 'q', '.', 'B', 'C', 'R', 'V', 'v', '#', '&', '?':
+			case 'j', 'k', 'q', '.', 'B', 'C', 'R', 'V', 'v', '#', '&', '?', 'd':
 				warning("EscapeChar [%s] conflicts with other shortcuts", escCh)
 			default:
 				if b <= ' ' || b > '~' {

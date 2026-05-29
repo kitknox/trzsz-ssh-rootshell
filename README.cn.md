@@ -190,7 +190,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   </details>
 
-- 可从 [GitHub Releases](https://github.com/trzsz/trzsz-ssh/releases) 中下载，国内可从 [Gitee 发行版](https://gitee.com/trzsz/tssh/releases) 中下载，然后本地安装。
+- 可从 [GitHub Releases](https://github.com/trzsz/trzsz-ssh/releases) 或 [Pre-Release](https://github.com/trzsz/trzsz-ssh/releases/tag/dev) 中下载，国内可从 [Gitee 发行版](https://gitee.com/trzsz/tssh/releases) 中下载，然后本地安装。
 
   <details><summary><code>下载并本地安装</code></summary>
 
@@ -356,12 +356,12 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 在服务器上要安装 [trzsz](https://trzsz.github.io/cn/)，才能使用 `trz / tsz` 上传和下载，可任选其一安装：[Go 版](https://trzsz.github.io/cn/go)（ ⭐ 推荐 ）、[Py 版](https://trzsz.github.io/cn/)、[Js 版](https://trzsz.github.io/cn/js)。
 
-- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableDragFile` 为 `Yes` 启用拖拽上传功能。
+- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableDragFile` 为 `yes` 启用拖拽上传功能。
 
   ```
   Host *
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableDragFile Yes
+    EnableDragFile yes
   ```
 
 - 如果想在拖拽上传时覆盖现有文件，请将 `DragFileUploadCommand` 配置为 `trz -y` ：
@@ -374,12 +374,12 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 如果只是想临时启用拖拽上传功能，可以在命令行中使用 `tssh --dragfile` 登录服务器。
 
-- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableTrzsz` 为 `No` 禁用 trzsz 和 zmodem。
+- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableTrzsz` 为 `no` 禁用 trzsz 和 zmodem。
 
   ```
   Host no_trzsz_nor_zmodem
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableTrzsz No
+    EnableTrzsz no
   ```
 
 - 可使用 `--upload-file` 参数在命令行中指定文件或目录直接上传，也可在服务器后面指定 `trz` 上传命令参数和保存路径，如：
@@ -398,12 +398,12 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 ### 支持 zmodem
 
-- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableZmodem` 为 `Yes` 启用 `rz / sz` 功能。
+- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableZmodem` 为 `yes` 启用 `rz / sz` 功能。
 
   ```
   Host *
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableZmodem Yes
+    EnableZmodem yes
   ```
 
 - 如果想在拖拽文件时使用 rz 上传，请将 `DragFileUploadCommand` 配置为 `rz` ：
@@ -411,7 +411,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   ```
   Host xxx
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableDragFile Yes
+    EnableDragFile yes
     DragFileUploadCommand rz
   ```
 
@@ -793,10 +793,10 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   PromptSelectedIcon = 🍺
 
   # 登录后自动设置终端标题，退出后不会重置，你需要参考下文在本地 shell 中设置 PROMPT_COMMAND
-  SetTerminalTitle = Yes
+  SetTerminalTitle = yes
 
   # 使用 `ssh -G` 解析 OpenSSH 配置，包括 `Match` 规则
-  UseOpenSSHConfig = Yes
+  UseOpenSSHConfig = yes
   ```
 
 ### 配置注释
@@ -816,12 +816,12 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 ### Wayland 集成
 
-- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableWaypipe` 为 `Yes` 启用 Wayland (waypipe) 集成功能。
+- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableWaypipe` 为 `yes` 启用 Wayland (waypipe) 集成功能。
 
   ```
   Host xxx
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableWaypipe Yes
+    EnableWaypipe yes
   ```
 
 - 启用 Wayland (waypipe) 集成功能后，无需再显式使用 waypipe 程序，tssh 将在后台自动运行 waypipe 程序。
@@ -834,7 +834,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   ```
   Host xxx
-    #!! EnableWaypipe Yes
+    #!! EnableWaypipe yes
     #!! WaypipeClientPath /usr/bin/waypipe
     #!! WaypipeServerPath /usr/bin/waypipe
     #!! WaypipeClientOption -c lz4
@@ -843,12 +843,12 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 ### 剪贴板集成
 
-- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableOSC52` 为 `Yes` 启用剪贴板集成功能。
+- 在 `~/.ssh/config` 或 `ExConfigPath` 配置文件中，配置 `EnableOSC52` 为 `yes` 启用剪贴板集成功能。
 
   ```
   Host *
     # 如果配置在 ~/.ssh/config 中，可以加上 `#!!` 前缀，以兼容标准 ssh
-    EnableOSC52 Yes
+    EnableOSC52 yes
   ```
 
 - 启用剪贴板集成功能后，支持远程服务器通过 OSC52 序列写入本地剪贴板。
@@ -917,7 +917,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   PROMPT_COMMAND='echo -ne "\033]0;${USER}@${HOSTNAME}: ${PWD}\007"'
   ```
 
-  - 如果在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中设置了 `SetTerminalTitle = Yes`，则会在登录后自动设置终端标题，但是服务器上的 `PROMPT_COMMAND` 会覆盖 `tssh` 设置的标题。
+  - 如果在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中设置了 `SetTerminalTitle = yes`，则会在登录后自动设置终端标题，但是服务器上的 `PROMPT_COMMAND` 会覆盖 `tssh` 设置的标题。
   - 在 `tssh` 退出后不会重置为原来的标题，你需要在本地 shell 中设置 `PROMPT_COMMAND`，让它覆盖 `tssh` 设置的标题。
 
 - 支持 DNS SRV，假设你家里有多台主机，但你只有一个公网 IP，你可以像下面这样设置 SRV 记录，并在 `~/.ssh/config` 中类似配置：
@@ -946,7 +946,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   ```
   Host xxx
-      #!! UdpMode  ( Yes | QUIC | KCP )
+      #!! UdpMode  ( yes | QUIC | KCP )
   ```
 
 - `tssh` 在客户端扮演 `ssh` 的角色，`tsshd` 在服务端扮演 `sshd` 的角色。
@@ -955,11 +955,13 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - `tsshd` 进程会随机侦听一个 61001 到 61999 之间的 UDP 端口（可通过 `TsshdPort` 配置自定义），并将其端口和几个密钥通过 ssh 通道发回给 `tssh` 进程。登录的 ssh 连接会被关闭，然后 `tssh` 进程通过 UDP 与 `tsshd` 进程通讯。
 
+![tsshd attach session](https://trzsz.github.io/images/tsshd_attach.gif)
+
 ### UDP 配置
 
 ```
 Host xxx
-    #!! UdpMode Yes
+    #!! UdpMode yes
     #!! TsshdPort 61001-61999
     #!! TsshdPath ~/go/bin/tsshd
     #!! UdpAliveTimeout 86400
@@ -969,9 +971,11 @@ Host xxx
     #!! ShowFullNotifications yes
     #!! UdpProxyMode UDP
     #!! UdpMTU 1400
+    #!! UdpSessionAttach no
+    #!! UdpSessionName xxx
 ```
 
-- `UdpMode`: `No` (默认为`No`: tssh 工作在 TCP 模式), `Yes` (默认协议: `QUIC`), `QUIC` ([QUIC](https://github.com/quic-go/quic-go) 协议：速度更快), `KCP` ([KCP](https://github.com/xtaci/kcp-go) 协议：延迟更低).
+- `UdpMode`: `no` (默认为`no`: tssh 工作在 TCP 模式), `yes` (默认协议: `QUIC`), `QUIC` ([QUIC](https://github.com/quic-go/quic-go) 协议：速度更快), `KCP` ([KCP](https://github.com/xtaci/kcp-go) 协议：延迟更低).
 
 - `TsshdPort`: 指定 tsshd 监听的端口范围，默认值为 [61001, 61999]。支持指定离散的端口列表(如`6022,7022`)，也支持指定离散的端口范围(如`8010-8020,9020-9030,10080`)，tsshd 会随机监听其中一个空闲的端口。也可在命令行中使用 `--tsshd-port` 指定端口。
 
@@ -983,13 +987,17 @@ Host xxx
 
 - `UdpReconnectTimeout`: 如果断开连接的时间超过 `UdpReconnectTimeout` 秒，tssh 将会显示失去连接的通知公告。默认值为 15 秒。
 
-- `ShowNotificationOnTop`: 是否在屏幕顶部显示失去连接的通知。默认为 yes，这可能会覆盖之前的一些输出。设置为 `No` 在光标当前行显示通知。
+- `ShowNotificationOnTop`: 是否在屏幕顶部显示失去连接的通知。默认为 yes，这可能会覆盖之前的一些输出。设置为 `no` 在光标当前行显示通知。
 
-- `ShowFullNotifications`: 是显示完整的通知，还是显示简短的通知。默认为 yes，这可能会输出几行通知到屏幕上。设置为 `No` 只输出一行通知。
+- `ShowFullNotifications`: 是显示完整的通知，还是显示简短的通知。默认为 yes，这可能会输出几行通知到屏幕上。设置为 `no` 只输出一行通知。
 
 - `UdpProxyMode`: 默认使用 `UDP` 协议进行传输。如果所在的网络环境有防火墙禁止了 `UDP` 流量，可以配置为 `TCP` 以绕过防火墙限制，但这可能会带来额外的延迟。
 
 - `UdpMTU`: 设置 UDP 数据包的最大传输单元（MTU），默认值为 1400。
+
+- `UdpSessionAttach`: 默认为 `no`。配置为 `yes` 时，允许附加到服务器上已存在的会话；同时，本次登录的会话也会运行在可附加模式下，支持后续在其他设备或网络下重新登录时附加。
+
+- `UdpSessionName`: 自定义会话名称。仅在 `UdpSessionAttach` 配置为 `yes` 或通过 `--attach` 参数登录时生效。若服务器端已存在该名称的会话，将直接附加；若不存在，则以此名称创建新会话，供后续登录时自动附加。
 
 ### UDP 端口转发
 

@@ -78,19 +78,58 @@ type sshUdpClient struct {
 	notifInterceptor *notifInterceptor
 	notifModel       atomic.Pointer[notifModel]
 	sshDestName      string
+	attachMode       bool
 	sshConn          atomic.Pointer[sshConnection]
 }
 
+type detachableWriter struct {
+	io.WriteCloser
+	attachMode bool
+}
+
+func (w *detachableWriter) Close() error {
+	if w.attachMode && !wantExit.Load() {
+		return nil
+	}
+	return w.WriteCloser.Close()
+}
+
+type detachableSession struct {
+	*tsshd.SshUdpSession
+	attachMode bool
+}
+
+func (s *detachableSession) StdinPipe() (io.WriteCloser, error) {
+	writer, err := s.SshUdpSession.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	return &detachableWriter{writer, s.attachMode}, nil
+}
+
+func (s *detachableSession) Close() error {
+	if s.attachMode && !wantExit.Load() {
+		return nil
+	}
+	return s.SshUdpSession.Close()
+}
+
 func (c *sshUdpClient) NewSession() (SshSession, error) {
-	return c.SshUdpClient.NewSession()
+	session, err := c.SshUdpClient.NewSession()
+	if err != nil {
+		return nil, err
+	}
+	return &detachableSession{session, c.attachMode}, nil
 }
 
 func (c *sshUdpClient) DialTimeout(network, addr string, timeout time.Duration) (net.Conn, error) {
 	return c.SshUdpClient.DialTimeout(network, addr, timeout)
 }
 
-func (c *sshUdpClient) Close() error {
-	err := c.SshUdpClient.Close()
+func (c *sshUdpClient) Close() (err error) {
+	if !c.attachMode || wantExit.Load() {
+		err = c.SshUdpClient.Close()
+	}
 	if c.waitCloseChan != nil {
 		select {
 		case c.waitCloseChan <- struct{}{}:
@@ -131,7 +170,7 @@ func (c *sshUdpClient) udpKeepAlive() {
 	for !c.IsClosed() {
 		if c.sshConn.Load() != nil && time.Since(time.UnixMilli(c.GetLastActiveTime())) > c.aliveTimeout {
 			c.debug("alive timeout for %v", c.aliveTimeout)
-			c.exit(kExitCodeUdpTimeout, fmt.Sprintf("Exit due to connection was lost and timeout for %v", c.aliveTimeout))
+			c.exit(kExitCodeUdpTimeout, fmt.Sprintf("lost connection and timeout after %v", c.aliveTimeout))
 			return
 		}
 
@@ -180,7 +219,7 @@ func quitCallback(name, reason string) {
 	for lastJumpUdpClient == nil || lastJumpUdpClient.sshConn.Load() == nil {
 		time.Sleep(10 * time.Millisecond) // waiting for sshConn to be initialized
 	}
-	lastJumpUdpClient.sshConn.Load().forceExit(kExitCodeSignalKill, fmt.Sprintf("Exit due to [%s] %s", name, reason))
+	lastJumpUdpClient.sshConn.Load().forceExit(kExitCodeSignalKill, fmt.Sprintf("[%s] %s", name, reason))
 }
 
 func initGlobalUdpAliveTimeout(args *sshArgs) {
@@ -227,8 +266,29 @@ func udpLogin(param *sshParam, tcpClient SshClient) (SshClient, error) {
 	}
 
 	// start tsshd
+	attachMode := false
+	tsshdPath := getTsshdPath(args)
 	connectTimeout := getConnectTimeout(args)
-	tsshdCmd := getTsshdCommand(param, mtu, connectTimeout)
+	sessionName := getExOptionConfig(args, "UdpSessionName")
+	var tsshdCmdBuf *strings.Builder
+	if args.Attach || strings.ToLower(getExOptionConfig(args, "UdpSessionAttach")) == "yes" {
+		var err error
+		tsshdCmdBuf, err = attachToSession(tcpClient, tsshdPath, sessionName)
+		if err != nil {
+			if _, ok := err.(*attachSelectError); ok {
+				return nil, fmt.Errorf("failed to select tsshd session to attach: %v", err)
+			}
+			warning("falling back to new session due to attach failed: %v", err)
+		}
+		if tsshdCmdBuf == nil {
+			tsshdCmdBuf = getTsshdCommand(param, tsshdPath, mtu, connectTimeout)
+			tsshdCmdBuf.WriteString(" --attachable --socket")
+		}
+		attachMode = true
+	} else {
+		tsshdCmdBuf = getTsshdCommand(param, tsshdPath, mtu, connectTimeout)
+	}
+	tsshdCmd := tsshdCmdBuf.String()
 	debug("udp login to [%s] tsshd command: %s", args.Destination, tsshdCmd)
 
 	serverInfo, err := startTsshdServer(args, tcpClient, tsshdCmd)
@@ -256,6 +316,7 @@ func udpLogin(param *sshParam, tcpClient SshClient) (SshClient, error) {
 		connectTimeout:   connectTimeout,
 		reconnectTimeout: reconnectTimeout,
 		sshDestName:      args.Destination,
+		attachMode:       attachMode,
 	}
 	tsshdAddr := joinHostPort(param.host, strconv.Itoa(serverInfo.Port))
 	clientOpts := &tsshd.UdpClientOptions{
@@ -264,6 +325,7 @@ func udpLogin(param *sshParam, tcpClient SshClient) (SshClient, error) {
 		IPv4:             param.ipv4,
 		IPv6:             param.ipv6,
 		TsshdAddr:        tsshdAddr,
+		SessionName:      sessionName,
 		ServerInfo:       serverInfo,
 		AliveTimeout:     globalUdpAliveTimeout,
 		IntervalTime:     intervalTime,
@@ -391,16 +453,20 @@ func startTsshdServer(args *sshArgs, tcpClient SshClient, tsshdCmd string) (*tss
 	return &info, nil
 }
 
-func getTsshdCommand(param *sshParam, mtu uint16, connectTimeout time.Duration) string {
+func getTsshdPath(args *sshArgs) string {
+	if args.TsshdPath != "" {
+		return args.TsshdPath
+	}
+	if tsshdPath := getExOptionConfig(args, "TsshdPath"); tsshdPath != "" {
+		return tsshdPath
+	}
+	return "tsshd"
+}
+
+func getTsshdCommand(param *sshParam, tsshdPath string, mtu uint16, connectTimeout time.Duration) *strings.Builder {
 	args := param.args
 	var buf strings.Builder
-	if args.TsshdPath != "" {
-		buf.WriteString(args.TsshdPath)
-	} else if tsshdPath := getExOptionConfig(args, "TsshdPath"); tsshdPath != "" {
-		buf.WriteString(tsshdPath)
-	} else {
-		buf.WriteString("tsshd")
-	}
+	buf.WriteString(tsshdPath)
 
 	if param.udpMode == kUdpModeKcp {
 		buf.WriteString(" --kcp")
@@ -454,7 +520,7 @@ func getTsshdCommand(param *sshParam, mtu uint16, connectTimeout time.Duration) 
 		fmt.Fprintf(&buf, "%d", connectTimeout/time.Second)
 	}
 
-	return buf.String()
+	return &buf
 }
 
 func parseTsshdPortRanges(tsshdPort string) [][2]uint16 {
@@ -585,7 +651,7 @@ func getUdpMode(args *sshArgs) udpModeType {
 		warning("unknown UdpMode %s", udpMode)
 	}
 
-	if args.UDP {
+	if args.UDP || args.Attach {
 		return kUdpModeYes
 	}
 	return kUdpModeNo

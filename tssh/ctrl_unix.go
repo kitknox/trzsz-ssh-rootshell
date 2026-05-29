@@ -43,6 +43,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
+	"golang.org/x/crypto/ssh"
 )
 
 const kOpenSSH = "ssh"
@@ -272,6 +273,9 @@ func startControlMaster(param *sshParam, sshPath string) error {
 	if args.ProxyJump != "" {
 		cmdArgs = append(cmdArgs, "-J", args.ProxyJump)
 	}
+	if args.ControlPath != "" {
+		cmdArgs = append(cmdArgs, "-S", args.ControlPath)
+	}
 
 	for _, identity := range args.Identity.values {
 		cmdArgs = append(cmdArgs, "-i", identity)
@@ -319,8 +323,10 @@ func startControlMaster(param *sshParam, sshPath string) error {
 
 func connectViaControl(param *sshParam) SshClient {
 	args := param.args
-	ctrlMaster := getOptionConfig(args, "ControlMaster")
-	ctrlPath := getOptionConfig(args, "ControlPath")
+	ctrlPath := args.ControlPath
+	if ctrlPath == "" {
+		ctrlPath = getOptionConfig(args, "ControlPath")
+	}
 
 	switch strings.ToLower(ctrlPath) {
 	case "", "none":
@@ -348,6 +354,7 @@ func connectViaControl(param *sshParam) SshClient {
 	}
 	socket = resolveHomeDir(socket)
 
+	ctrlMaster := getOptionConfig(args, "ControlMaster")
 	switch strings.ToLower(ctrlMaster) {
 	case "yes", "ask", "true":
 		if isFileExist(socket) {
@@ -369,7 +376,7 @@ func connectViaControl(param *sshParam) SshClient {
 		return nil
 	}
 
-	ncc, chans, reqs, err := NewControlClientConn(conn)
+	ncc, chans, reqs, err := ssh.NewControlClientConn(conn)
 	if err != nil {
 		warning("login to [%s] new conn from control path [%s] failed: %v", args.Destination, socket, err)
 		return nil
