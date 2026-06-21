@@ -16,8 +16,8 @@ trzsz-ssh ( tssh ) works exactly like the openssh client. The following common f
 
 |    Features    |                                                                            Support Options                                                                            |
 | :------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-|     Cipher     |                                                                            `-c` `Ciphers`                                                                             |
 |   Pseudo TTY   |                                                                        `-t` `-T` `RequestTTY`                                                                         |
+|   Algorithms   |                                                                    `-c` `Ciphers` `KexAlgorithms`                                                                     |
 |   SSH Proxy    |                                                                 `-J` `-W` `ProxyJump` `ProxyCommand`                                                                  |
 |    Network     |                                                              `-4` `-6` `AddressFamily` `ConnectTimeout`                                                               |
 |  Multiplexing  |                                                          `-S` `ControlMaster` `ControlPath` `ControlPersist`                                                          |
@@ -294,6 +294,8 @@ Welcome and thank you for considering contributing. We appreciate all forms of s
 - Once you are happy with your changes, please submit a pull request.
 
 ### Screenshot
+
+![tsshd attach](https://trzsz.github.io/images/tsshd_attach.gif)
 
 ![tssh tiny](https://trzsz.github.io/images/tssh_tiny.gif)
 

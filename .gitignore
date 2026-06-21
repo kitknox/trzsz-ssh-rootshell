@@ -29,3 +29,7 @@ vendor/
 # Build artifacts
 *.xcframework/
 .gobind-work/
+
+# gomobile bind outputs (compiled per-variant static libs + headers)
+TrzszSSH-*.a
+TrzszSSH-*.h

@@ -331,16 +331,17 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 		IntervalTime:     intervalTime,
 		ConnectTimeout:   connectTimeout,
 		HeartbeatTimeout: heartbeatTimeout,
-		DiscardCallback: func(discarded []byte) {
+		DiscardCallback: func(discardedInput []byte, discardedOutputLines, discardedOutputBytes uint64) {
 			// Upstream now handles discard marker injection automatically in
-			// the client-side forwardInput(). This callback only receives
-			// notification of discarded input bytes.
+			// the client-side forwardInput(). This callback receives notification
+			// of discarded pending input bytes and, since upstream #39, the count
+			// of stale terminal output (lines/bytes) discarded on reattachment.
 			if dl := getDebugLogger(); dl != nil {
 				label := config.DebugLabel
 				if label != "" {
-					dl.OnDebug(fmt.Sprintf("[%s] [discard] %d bytes of pending input", label, len(discarded)))
+					dl.OnDebug(fmt.Sprintf("[%s] [discard] %d bytes of pending input, %d output lines (%d bytes)", label, len(discardedInput), discardedOutputLines, discardedOutputBytes))
 				} else {
-					dl.OnDebug(fmt.Sprintf("[discard] %d bytes of pending input", len(discarded)))
+					dl.OnDebug(fmt.Sprintf("[discard] %d bytes of pending input, %d output lines (%d bytes)", len(discardedInput), discardedOutputLines, discardedOutputBytes))
 				}
 			}
 		},

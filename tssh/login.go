@@ -38,6 +38,7 @@ import (
 	"time"
 
 	"github.com/trzsz/shellescape"
+	"github.com/trzsz/tsshd/tsshd"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -117,7 +118,7 @@ func canonicalizeHost(args *sshArgs, host string) (string, error) {
 			maxDots = int(val)
 		}
 	}
-	if dotCount := strings.Count(host, "."); dotCount >= maxDots {
+	if dotCount := strings.Count(host, "."); dotCount > maxDots {
 		return host, nil
 	}
 
@@ -172,7 +173,7 @@ func getSshParam(args *sshArgs, proxy bool) (*sshParam, error) {
 			if err != nil {
 				return nil, err
 			}
-			param.host, destHost = host, host
+			param.host, destHost, args.Destination = host, host, host
 		}
 	}
 
@@ -277,13 +278,13 @@ func getProxyParam(param *sshParam) {
 	}
 
 	proxyJump = getConfig(args.Destination, "ProxyJump")
-	if proxyJump != "" {
+	if proxyJump != "" && strings.ToLower(proxyJump) != "none" {
 		param.proxies = strings.Split(proxyJump, ",")
 		return
 	}
 
 	proxyCommand = getConfig(args.Destination, "ProxyCommand")
-	if proxyCommand != "" {
+	if proxyCommand != "" && strings.ToLower(proxyCommand) != "none" {
 		param.command = proxyCommand
 		return
 	}
@@ -491,23 +492,23 @@ func setupLogLevel(args *sshArgs) func() {
 	return reset
 }
 
-func getNetworkAddressFamily(args *sshArgs) string {
+func getNetworkAddressFamily(args *sshArgs) (string, bool, bool) {
 	if args.IPv4Only {
 		if args.IPv6Only {
-			return "tcp"
+			return "tcp", false, false
 		}
-		return "tcp4"
+		return "tcp4", true, false
 	}
 	if args.IPv6Only {
-		return "tcp6"
+		return "tcp6", false, true
 	}
 	switch strings.ToLower(getOptionConfig(args, "AddressFamily")) {
 	case "inet":
-		return "tcp4"
+		return "tcp4", true, false
 	case "inet6":
-		return "tcp6"
+		return "tcp6", false, true
 	default:
-		return "tcp"
+		return "tcp", false, false
 	}
 }
 
@@ -550,7 +551,7 @@ func getClientConfig(param *sshParam) (*ssh.ClientConfig, error) {
 
 func connectViaProxyJump(param *sshParam, config *ssh.ClientConfig) (SshClient, error) {
 	debug("login to [%s] via proxy jump [%s] addr: %s", param.args.Destination, param.proxy.name, param.addr)
-	network := getNetworkAddressFamily(param.args)
+	network, _, _ := getNetworkAddressFamily(param.args)
 	conn, err := param.proxy.client.DialTimeout(network, param.addr, config.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("proxy jump [%s] dial [%s] [%s] failed: %v", param.proxy.name, network, param.addr, err)
@@ -588,7 +589,7 @@ func connectDirectly(param *sshParam, config *ssh.ClientConfig) (SshClient, erro
 	if config.Timeout > 0 {
 		dialer.Timeout = config.Timeout
 	}
-	network := getNetworkAddressFamily(param.args)
+	network, _, _ := getNetworkAddressFamily(param.args)
 	conn, err := dialer.Dial(network, param.addr)
 	if err != nil {
 		return nil, fmt.Errorf("login to [%s] dial [%s] [%s] failed: %v", param.args.Destination, network, param.addr, err)
@@ -614,7 +615,7 @@ func tcpLogin(param *sshParam, proxy *proxyJump, requireUDP udpModeType) (SshCli
 	if err != nil {
 		return nil, err
 	}
-	if err := setupCiphersConfig(param.args, config); err != nil {
+	if err := setupAlgorithmsConfig(param.args, config); err != nil {
 		return nil, err
 	}
 
@@ -720,14 +721,18 @@ func keepAlive(sshConn *sshConnection) {
 	}
 
 	sendKeepAlive := func(idx int) {
-		debug("keep alive [%d] sending", idx)
+		if enableDebugLogging {
+			writeDebugLog(time.Now().UnixMilli(), sshConn.param.args.Destination, fmt.Sprintf("keep alive [%d] sending", idx))
+		}
 		if _, _, err := sshConn.client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-			if !isClosedError(err) {
+			if !tsshd.IsClosedError(err) {
 				debug("keep alive [%d] failed: %v", idx, err)
 			}
 			return
 		}
-		debug("keep alive [%d] success", idx)
+		if enableDebugLogging {
+			writeDebugLog(time.Now().UnixMilli(), sshConn.param.args.Destination, fmt.Sprintf("keep alive [%d] success", idx))
+		}
 	}
 
 	go func() {
