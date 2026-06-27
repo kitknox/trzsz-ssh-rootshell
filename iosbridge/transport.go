@@ -569,7 +569,25 @@ func (t *Transport) SetKeepPendingInput(keep bool) error {
 	if t.client == nil {
 		return fmt.Errorf("transport not connected")
 	}
-	return t.client.SetKeepPendingInput(keep)
+	err := t.client.SetKeepPendingInput(keep)
+	if dl := getDebugLogger(); dl != nil {
+		dl.OnDebug(fmt.Sprintf("[keep-pending] sent SetKeepPendingInput(%v) err=%v", keep, err))
+	}
+	return err
+}
+
+// SetKeepPendingOutput controls whether stale terminal output buffered during a
+// transport timeout is kept and replayed after reconnect instead of being
+// discarded on redraw. The upstream default is false (discard).
+func (t *Transport) SetKeepPendingOutput(keep bool) error {
+	if t.client == nil {
+		return fmt.Errorf("transport not connected")
+	}
+	err := t.client.SetKeepPendingOutput(keep)
+	if dl := getDebugLogger(); dl != nil {
+		dl.OnDebug(fmt.Sprintf("[keep-pending] sent SetKeepPendingOutput(%v) err=%v", keep, err))
+	}
+	return err
 }
 
 // TransportSession represents a shell session over the transport.
