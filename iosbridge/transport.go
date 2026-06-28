@@ -249,6 +249,12 @@ type Transport struct {
 	// Callback for state changes
 	stateCallback TransportStateCallback
 
+	// Notifier for server-side discard events (a tssh reconnect dropped buffered
+	// data). Guarded by mu; set via SetDiscardNotifier, read in the tsshd
+	// DiscardCallback closure. The app uses an OUTPUT discard on a tmux -CC
+	// gateway to drive a full surface reset + recapture.
+	discardNotifier DiscardNotifier
+
 	// Agent forwarding stop channel — closed in Close() to stop the agent goroutine.
 	agentStopChan chan struct{}
 
@@ -288,6 +294,28 @@ type noOpTransportStateCallback struct{}
 func (n *noOpTransportStateCallback) OnStateChange(state string) {}
 func (n *noOpTransportStateCallback) OnReconnecting(attempt int) {}
 func (n *noOpTransportStateCallback) OnError(message string)     {}
+
+// DiscardNotifier receives notification that the server discarded buffered
+// terminal data on a lossy reconnect. tsshd (with keep-pending OFF) caches a
+// bounded amount of output while the client is gone and DROPS the overflow,
+// reporting the dropped line/byte counts; it also discards pending input the
+// client typed during the outage. For a tmux -CC gateway a non-recoverable
+// OUTPUT discard means the control stream lost bytes mid-block, so the app does
+// a full surface reset + recapture. Counts only — no payload crosses.
+type DiscardNotifier interface {
+	// OnDiscard is called from a background goroutine when the server reports
+	// discarded data. inputBytes is locally-discarded pending input; outputLines
+	// and outputBytes are stale terminal output the server dropped on reattach.
+	OnDiscard(inputBytes, outputLines, outputBytes int)
+}
+
+// SetDiscardNotifier sets the callback for server-side discard events. Pass nil
+// to clear. Safe to call any time after ConnectTransport.
+func (t *Transport) SetDiscardNotifier(n DiscardNotifier) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.discardNotifier = n
+}
 
 // ConnectTransport establishes a KCP/QUIC transport connection.
 // This should be called AFTER SSH has spawned tsshd and returned the server info.
@@ -339,10 +367,19 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 			if dl := getDebugLogger(); dl != nil {
 				label := config.DebugLabel
 				if label != "" {
-					dl.OnDebug(fmt.Sprintf("[%s] [discard] %d bytes of pending input, %d output lines (%d bytes)", label, len(discardedInput), discardedOutputLines, discardedOutputBytes))
+					dl.OnDebug(fmt.Sprintf("[%s] [discard][tmux-cc] %d bytes of pending input, %d output lines (%d bytes)", label, len(discardedInput), discardedOutputLines, discardedOutputBytes))
 				} else {
-					dl.OnDebug(fmt.Sprintf("[discard] %d bytes of pending input, %d output lines (%d bytes)", len(discardedInput), discardedOutputLines, discardedOutputBytes))
+					dl.OnDebug(fmt.Sprintf("[discard][tmux-cc] %d bytes of pending input, %d output lines (%d bytes)", len(discardedInput), discardedOutputLines, discardedOutputBytes))
 				}
+			}
+			// Surface to the app so a tmux -CC gateway can reset + recapture on a
+			// lossy OUTPUT discard. Read the notifier under the lock; discards are
+			// infrequent so the brief contention is negligible.
+			transport.mu.Lock()
+			n := transport.discardNotifier
+			transport.mu.Unlock()
+			if n != nil {
+				n.OnDiscard(len(discardedInput), int(discardedOutputLines), int(discardedOutputBytes))
 			}
 		},
 	}
