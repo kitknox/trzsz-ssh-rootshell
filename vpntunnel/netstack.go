@@ -93,7 +93,7 @@ type tunnelStack struct {
 }
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
-func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, stats *tunnelStats) (*tunnelStack, error) {
+func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, stats *tunnelStats, datagramBudget int) (*tunnelStack, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mtu := cfg.MTU
@@ -185,12 +185,23 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	})
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
 
-	// Set up UDP forwarding
-	udpFwd := newUDPForwarder(udpDial, tcpDial, stats)
+	// Set up UDP forwarding. Flows refused by allowFlow return false from
+	// the handler, which makes gVisor reply with ICMP port-unreachable so
+	// clients fail fast (e.g. browsers drop to HTTP/2 instantly instead of
+	// black-holing on QUIC). Established endpoints are demuxed before the
+	// handler, so the policy check only runs for new flows.
+	udpFwd := newUDPForwarder(udpDial, tcpDial, stats, cfg.BlockQUIC, mtu, datagramBudget)
 	udpForwarderGvisor := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
 		udpFwd.handleUDP(r)
 	})
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarderGvisor.HandlePacket)
+	s.SetTransportProtocolHandler(udp.ProtocolNumber,
+		func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
+			if !udpFwd.allowFlow(id.LocalPort) {
+				stats.udpRejected()
+				return false
+			}
+			return udpForwarderGvisor.HandlePacket(id, pkt)
+		})
 
 	packetCh := make(chan packetEntry, packetReaderChSize)
 

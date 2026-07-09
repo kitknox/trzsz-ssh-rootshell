@@ -62,6 +62,11 @@ type VPNTunnelConfig struct {
 	DNSServers     []string `json:"dnsServers,omitempty"`
 	ExcludedRoutes []string `json:"excludedRoutes,omitempty"` // CIDRs to exclude
 	MTU            int      `json:"mtu,omitempty"`
+
+	// BlockQUIC rejects new UDP flows to port 443 with ICMP port-unreachable
+	// so browsers fall back to HTTP/2 immediately. Also auto-enabled when the
+	// transport's datagram budget is too small to carry QUIC packets.
+	BlockQUIC bool `json:"blockQUIC,omitempty"`
 }
 
 // ParseConfig deserializes a JSON config string into VPNTunnelConfig.

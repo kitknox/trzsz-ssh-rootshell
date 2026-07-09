@@ -70,7 +70,10 @@ func (d *tsshDialer) DialTCP(ctx context.Context, addr string) (net.Conn, error)
 }
 
 func (d *tsshDialer) DialUDP(ctx context.Context, addr string) (udpConn, error) {
-	pconn, err := d.client.DialUDP("udp", addr, dialTimeout)
+	// Datagram-only: oversize packets and packets sent while the carrier is
+	// reconnecting are dropped instead of riding the reliable stream, so the
+	// inner protocol's PMTUD (e.g. browser QUIC) converges below the budget.
+	pconn, err := d.client.DialUDPDatagramOnly("udp", addr, dialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("tssh dial udp %s: %w", addr, err)
 	}
@@ -94,8 +97,10 @@ func (a *packetConnAdapter) Close() error {
 	return a.pconn.Close()
 }
 
+// tsshd PacketConn doesn't support deadlines; UDP flow lifetime is owned by
+// the udpForwarder cleanup sweep (lastUse + per-flow idle timeout).
 func (a *packetConnAdapter) SetReadDeadline(_ time.Time) error {
-	return nil // tsshd PacketConn doesn't support deadlines
+	return nil
 }
 
 func (a *packetConnAdapter) SetWriteDeadline(_ time.Time) error {

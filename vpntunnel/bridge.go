@@ -87,6 +87,16 @@ const (
 	sshGCPercent       = 100
 )
 
+const (
+	// IPv4 header (20) + UDP header (8): overhead between TUN MTU and the
+	// inner UDP payload the tunnel actually relays.
+	ipv4Overhead = 28
+	// Minimum viable TUN MTU (IPv6 minimum link MTU).
+	minTunMTU = 1280
+	// QUIC requires paths that carry 1200-byte UDP payloads.
+	minQUICPayload = 1200
+)
+
 // TunnelCallback is the gomobile interface for receiving tunnel events.
 // Implement this in Swift to get notified of tunnel state changes.
 type TunnelCallback interface {
@@ -138,6 +148,7 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 
 	var tcpDial tcpDialer
 	var udpDial udpDialer
+	var datagramBudget int // transport max datagram payload (0 = no datagram path)
 
 	switch cfg.TransportType {
 	case "tssh":
@@ -150,13 +161,26 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 		d := &tsshDialer{client: c}
 		tcpDial = d
 		udpDial = d
+		datagramBudget = int(c.GetMaxDatagramSize())
 
-		// Auto-resolve TUN MTU from transport's actual max datagram size.
-		// This accounts for all overhead (encryption, FEC, protocol headers, channel ID).
+		// Auto-resolve TUN MTU from the transport's max datagram size.
+		// The tunnel relays only the inner UDP payload (gVisor terminates
+		// IP/UDP), so a full-MTU IPv4 UDP packet yields payload = MTU-28.
+		// Sizing TUN = budget+28 means steady-state datagrams always fit
+		// without the reliable-stream fallback. QUIC needs 1200-byte UDP
+		// payloads; if the budget can't carry them, clamp to the minimum
+		// viable TUN MTU and block QUIC so browsers get an immediate ICMP
+		// refusal and fall back to HTTP/2 instead of black-holing.
 		if cfg.MTU <= 0 {
-			if maxDG := int(c.GetMaxDatagramSize()); maxDG > 0 {
-				cfg.MTU = maxDG
-				log.Printf("vpntunnel: auto-resolved TUN MTU=%d from transport max datagram size", cfg.MTU)
+			if maxDG := datagramBudget; maxDG > 0 {
+				if maxDG >= minQUICPayload {
+					cfg.MTU = max(maxDG+ipv4Overhead, minTunMTU)
+					log.Printf("vpntunnel: auto-resolved TUN MTU=%d from transport datagram budget %d", cfg.MTU, maxDG)
+				} else {
+					cfg.MTU = minTunMTU
+					cfg.BlockQUIC = true
+					log.Printf("vpntunnel: transport datagram budget %d < %d, too small for QUIC; blocking UDP 443 (HTTP/2 fallback). Increase tsshd --mtu to at least 1297 (QUIC) / 1300 (KCP) for HTTP/3", maxDG, minQUICPayload)
+				}
 			} else {
 				cfg.MTU = 1500
 				log.Printf("vpntunnel: transport returned 0 max datagram size, falling back to TUN MTU=%d", cfg.MTU)
@@ -180,7 +204,7 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 		cfg.MTU = 1500
 	}
 
-	ts, err := newTunnelStack(cfg, tcpDial, udpDial, stats)
+	ts, err := newTunnelStack(cfg, tcpDial, udpDial, stats, datagramBudget)
 	if err != nil {
 		if globalClient != nil {
 			globalClient.Close()

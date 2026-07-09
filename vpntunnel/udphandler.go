@@ -39,7 +39,8 @@ import (
 )
 
 const (
-	udpIdleTimeout       = 15 * time.Second
+	udpIdleTimeout       = 60 * time.Second
+	udpIdleTimeoutQUIC   = 180 * time.Second // browser QUIC (dst 443) idles between interactions
 	udpCleanupInterval   = 5 * time.Second
 	udpAdmissionEvictAge = 5 * time.Second
 	udpBufferSize        = 16 * 1024
@@ -48,10 +49,12 @@ const (
 
 // udpForwarder handles UDP packets from the netstack.
 type udpForwarder struct {
-	dialer  udpDialer
-	stats   *tunnelStats
-	isDNS   func(addr string) bool
-	tcpDial tcpDialer // for DNS-over-TCP fallback (SSH mode)
+	dialer     udpDialer
+	stats      *tunnelStats
+	isDNS      func(addr string) bool
+	tcpDial    tcpDialer // for DNS-over-TCP fallback (SSH mode)
+	blockQUIC  bool
+	maxPayload int // largest inner UDP payload the TUN MTU can carry
 
 	mu    sync.Mutex
 	conns map[string]*udpConnTracker // key: "srcAddr->dstAddr"
@@ -59,22 +62,46 @@ type udpForwarder struct {
 
 // udpConnTracker tracks a single UDP "connection" (src→dst pair).
 type udpConnTracker struct {
-	remote  udpConn
-	cancel  context.CancelFunc
-	lastUse time.Time
+	remote      udpConn
+	cancel      context.CancelFunc
+	lastUse     time.Time
+	idleTimeout time.Duration
 }
 
-func newUDPForwarder(dialer udpDialer, tcpDial tcpDialer, stats *tunnelStats) *udpForwarder {
+func newUDPForwarder(dialer udpDialer, tcpDial tcpDialer, stats *tunnelStats, blockQUIC bool, tunMTU int, datagramBudget int) *udpForwarder {
+	// Inbound cap: what the TUN can carry, and also what the transport's
+	// datagram path can carry. Anything above the datagram budget only
+	// arrives via an unpatched server's reliable-stream fallback (e.g.
+	// origin PMTUD probes when the TUN MTU is clamped above budget+28);
+	// dropping it preserves real-UDP semantics in the reverse direction.
+	maxPayload := tunMTU - ipv4Overhead
+	if datagramBudget > 0 && datagramBudget < maxPayload {
+		maxPayload = datagramBudget
+	}
 	return &udpForwarder{
-		dialer:  dialer,
-		stats:   stats,
-		tcpDial: tcpDial,
+		dialer:     dialer,
+		stats:      stats,
+		tcpDial:    tcpDial,
+		blockQUIC:  blockQUIC,
+		maxPayload: maxPayload,
 		isDNS: func(addr string) bool {
 			_, port, _ := net.SplitHostPort(addr)
 			return port == "53"
 		},
 		conns: make(map[string]*udpConnTracker),
 	}
+}
+
+// allowFlow decides whether a new UDP flow to dstPort may be forwarded.
+// Refused flows get an ICMP port-unreachable from gVisor, so browsers fall
+// back to HTTP/2 immediately instead of black-holing on QUIC. Established
+// flows are demuxed before this check and are never affected.
+func (f *udpForwarder) allowFlow(dstPort uint16) bool {
+	if f.dialer == nil {
+		// SSH mode: only DNS (answered via DNS-over-TCP) is supported.
+		return dstPort == 53
+	}
+	return !(f.blockQUIC && dstPort == 443)
 }
 
 // handleUDP is the UDP forwarder function registered with gVisor.
@@ -109,8 +136,12 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 		}
 	}
 
+	idleTimeout := udpIdleTimeout
+	if id.LocalPort == 443 {
+		idleTimeout = udpIdleTimeoutQUIC
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	tracker := &udpConnTracker{cancel: cancel, lastUse: time.Now()}
+	tracker := &udpConnTracker{cancel: cancel, lastUse: time.Now(), idleTimeout: idleTimeout}
 	f.conns[key] = tracker
 	f.mu.Unlock()
 
@@ -130,7 +161,8 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 		}()
 
 		if f.dialer == nil {
-			// SSH mode: only handle DNS via TCP
+			// SSH mode: only DNS reaches here (allowFlow rejects the rest
+			// with ICMP port-unreachable); answer it via DNS-over-TCP.
 			if f.isDNS(dstAddr) {
 				f.handleDNSOverTCP(ctx, ep, &wq, dstAddr)
 			}
@@ -181,7 +213,6 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					f.mu.Lock()
 					tracker.lastUse = time.Now()
 					f.mu.Unlock()
-					remote.SetWriteDeadline(time.Now().Add(udpIdleTimeout))
 					if err := remote.Write(buf[:n]); err != nil {
 						return
 					}
@@ -194,7 +225,6 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 			defer func() { done <- struct{}{} }()
 			buf := make([]byte, udpBufferSize)
 			for {
-				remote.SetReadDeadline(time.Now().Add(udpIdleTimeout))
 				n, err := remote.Read(buf)
 				if err != nil {
 					return
@@ -203,6 +233,14 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					f.mu.Lock()
 					tracker.lastUse = time.Now()
 					f.mu.Unlock()
+					// Drop payloads the TUN MTU can't carry. Unpatched tsshd
+					// servers deliver oversize packets (e.g. origin QUIC PMTUD
+					// probes) via the reliable-stream fallback; dropping here
+					// keeps them unacknowledged so the origin's PMTUD converges
+					// below the datagram budget.
+					if n > f.maxPayload {
+						continue
+					}
 					data := buf[:n]
 					ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
 				}
@@ -319,7 +357,7 @@ func (f *udpForwarder) cleanup() {
 	defer f.mu.Unlock()
 	now := time.Now()
 	for key, tracker := range f.conns {
-		if now.Sub(tracker.lastUse) > udpIdleTimeout {
+		if now.Sub(tracker.lastUse) > tracker.idleTimeout {
 			if tracker.remote != nil {
 				_ = tracker.remote.Close()
 			}

@@ -40,6 +40,7 @@ type tunnelStats struct {
 	activeUDPConns   atomic.Int32
 	tcpCapacityDrops atomic.Int64
 	udpCapacityDrops atomic.Int64
+	udpRejects       atomic.Int64
 }
 
 // TunnelStatus is the JSON-serializable status returned by GetStatus.
@@ -53,6 +54,7 @@ type TunnelStatus struct {
 	TotalConns        int64  `json:"totalConns"`
 	TCPCapacityDrops  int64  `json:"tcpCapacityDrops"`
 	UDPCapacityDrops  int64  `json:"udpCapacityDrops"`
+	UDPRejects        int64  `json:"udpRejects"`
 	TransportType     string `json:"transportType"`
 	GoHeapAllocBytes  int64  `json:"goHeapAllocBytes"`
 	GoHeapInuseBytes  int64  `json:"goHeapInuseBytes"`
@@ -101,6 +103,12 @@ func (s *tunnelStats) udpCapacityDrop() {
 	s.udpCapacityDrops.Add(1)
 }
 
+// udpRejected counts UDP flows refused with ICMP port-unreachable
+// (SSH mode non-DNS traffic, or QUIC when blocked).
+func (s *tunnelStats) udpRejected() {
+	s.udpRejects.Add(1)
+}
+
 func (s *tunnelStats) toStatus(connected bool, transportType string) string {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
@@ -119,6 +127,7 @@ func (s *tunnelStats) toStatus(connected bool, transportType string) string {
 		TotalConns:        s.totalConns.Load(),
 		TCPCapacityDrops:  s.tcpCapacityDrops.Load(),
 		UDPCapacityDrops:  s.udpCapacityDrops.Load(),
+		UDPRejects:        s.udpRejects.Load(),
 		TransportType:     transportType,
 		GoHeapAllocBytes:  int64(mem.HeapAlloc),
 		GoHeapInuseBytes:  int64(mem.HeapInuse),
