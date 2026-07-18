@@ -255,6 +255,13 @@ type Transport struct {
 	// gateway to drive a full surface reset + recapture.
 	discardNotifier DiscardNotifier
 
+	// Notifier for heartbeat health transitions, pushed from tsshd's timeout
+	// checker so the app never has to poll GetLastActiveTime. Guarded by mu;
+	// set via SetHealthNotifier. healthHooked tracks the one-time tsshd
+	// callback registration (its callback list is append-only).
+	healthNotifier HealthNotifier
+	healthHooked   bool
+
 	// Agent forwarding stop channel — closed in Close() to stop the agent goroutine.
 	agentStopChan chan struct{}
 
@@ -315,6 +322,56 @@ func (t *Transport) SetDiscardNotifier(n DiscardNotifier) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.discardNotifier = n
+}
+
+// HealthNotifier receives heartbeat health transitions pushed from tsshd's
+// timeout checker. This replaces app-side polling of GetLastActiveTime():
+// the app registers once and only wakes when the state actually changes.
+type HealthNotifier interface {
+	// OnHealthTimeout is called from a background goroutine when no alive ack
+	// arrived within the heartbeat timeout. lastActiveMs is the last confirmed
+	// two-way activity time (Unix milliseconds).
+	OnHealthTimeout(lastActiveMs int64)
+
+	// OnHealthRecovered is called from a background goroutine when the
+	// heartbeat recovers after a timeout. lastActiveMs as above.
+	OnHealthRecovered(lastActiveMs int64)
+}
+
+// SetHealthNotifier sets the callback for heartbeat health transitions. Pass
+// nil to clear. Safe to call any time after ConnectTransport. The underlying
+// tsshd registration happens once, on the first non-nil call; the registered
+// closures read the current notifier under the lock, so clearing stops
+// delivery without needing tsshd-side deregistration.
+func (t *Transport) SetHealthNotifier(n HealthNotifier) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.healthNotifier = n
+	if t.healthHooked || t.client == nil || n == nil {
+		return
+	}
+	t.healthHooked = true
+	notify := func(timeout bool) {
+		if t.closed.Load() {
+			return
+		}
+		t.mu.Lock()
+		hn := t.healthNotifier
+		t.mu.Unlock()
+		if hn == nil {
+			return
+		}
+		lastActive := t.client.GetLastActiveTime()
+		if timeout {
+			hn.OnHealthTimeout(lastActive)
+		} else {
+			hn.OnHealthRecovered(lastActive)
+		}
+	}
+	t.client.OnHealthEvent(
+		func() { notify(true) },
+		func() { notify(false) },
+	)
 }
 
 // ConnectTransport establishes a KCP/QUIC transport connection.

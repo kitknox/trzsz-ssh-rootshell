@@ -37,6 +37,12 @@ require (
 
 replace github.com/trzsz/tsshd => /Users/kit/Development/tsshd
 
+// Local fork of kcp-go (v5.6.72 + idle-park patch): the periodic KCP update
+// loop parks itself when the session is idle instead of flushing every
+// interval (10ms) forever, eliminating ~100 timer wakeups/sec per idle
+// session. See sess.go kickUpdater().
+replace github.com/trzsz/kcp-go/v5 => /Users/kit/Development/trzsz-kcp-go
+
 require (
 	github.com/UserExistsError/conpty v0.1.4 // indirect
 	github.com/akavel/rsrc v0.10.2 // indirect

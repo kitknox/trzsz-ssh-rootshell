@@ -167,8 +167,6 @@ github.com/trzsz/go-socks5 v0.1.1 h1:mDYnqgFIndKOeMkzuqDAETiYwC7p1P+pDOZQfZWHBN8
 github.com/trzsz/go-socks5 v0.1.1/go.mod h1:BN+xFP3tb8oKl4hQTFDQIoL+tdCaJ0QhJKLwpmyjVik=
 github.com/trzsz/iterm2 v0.2.1 h1:LrrH8iAinFHTWg4zsErM9F87x5TO9gQgFEjLRNVsG80=
 github.com/trzsz/iterm2 v0.2.1/go.mod h1:weTtdC/IxGzghQC/1o5w/DqPc9ErntKgqLvRtnkWRaw=
-github.com/trzsz/kcp-go/v5 v5.6.72 h1:YjKXYC+S3nYtaJvivzR+CqdcZ9RVtLpDhUtRMtVk5Vs=
-github.com/trzsz/kcp-go/v5 v5.6.72/go.mod h1:/SVDPW+ZSVgcauuSjY+tR5zTzhVQxvboNt5WdFIIwPk=
 github.com/trzsz/pageant v0.1.1 h1:fIRYi6nRj36Rk9rUt6hjE2aWhrXwd3ehlg2AGrD3h6k=
 github.com/trzsz/pageant v0.1.1/go.mod h1:bM5vsxpW5pDylAbukG5aoxXJcQ1eS9oB36TKgfo6yNo=
 github.com/trzsz/promptui v0.10.8 h1:kM1GbE3hFt9puk7GIeI458Ea/V7yt95NcQEbC3164EQ=
