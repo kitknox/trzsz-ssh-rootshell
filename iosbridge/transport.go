@@ -280,6 +280,15 @@ type Transport struct {
 	// Accessed via atomic ops so the registration goroutine doesn't
 	// need to hold the transport mutex just to mint a fresh id.
 	nextStreamLocalRef int64
+
+	// Auxiliary exec channels (piped-stdio remote commands), keyed by
+	// the int64 refs handed to Swift from OpenExec. Guarded by mu; torn
+	// down in Close. See iosbridge/exec.go for full lifecycle.
+	execChannels map[int64]*execChannel
+
+	// Monotonically increasing counter for exec channel refs. Atomic,
+	// same pattern as nextStreamLocalRef.
+	nextExecRef int64
 }
 
 // TransportStateCallback receives transport state changes.
@@ -601,6 +610,10 @@ func (t *Transport) Close() error {
 	// channels. Done outside the lock above because net.Conn.Close
 	// can block on Network.framework's underlying connection state.
 	t.closeAllStreamLocal()
+
+	// Tear down any auxiliary exec channels the same way — session
+	// close can block briefly on the network.
+	t.closeAllExec()
 
 	return t.client.Close()
 }
