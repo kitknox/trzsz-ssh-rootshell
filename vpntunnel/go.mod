@@ -8,7 +8,9 @@ require (
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633
 )
 
-replace github.com/trzsz/tsshd => /Users/kit/Development/tsshd
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a
+
+replace github.com/trzsz/kcp-go/v5 => github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect

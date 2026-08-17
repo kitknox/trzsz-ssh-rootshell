@@ -1,3 +1,18 @@
+# trzsz-ssh (tssh) — rootshell fork
+
+This repository is the [rootshell](https://www.rootshell.com)-maintained fork
+of [trzsz/trzsz-ssh](https://github.com/trzsz/trzsz-ssh). It adds the Go Mobile
+and iOS integration used by rootshell, including app-lifecycle-aware transport,
+port-forwarding, and VPN tunnel support. The fork is maintained independently
+and does not automatically track subsequent upstream changes.
+
+The `tssh` command name and Go module path remain unchanged. Report rootshell
+application problems in the
+[rootshell issue tracker](https://github.com/kitknox/rootshell/issues); report
+reproducible upstream `trzsz-ssh` problems to the upstream project.
+
+---
+
 ## trzsz-ssh(tssh): Highly OpenSSH-compatible client with extended features
 
 

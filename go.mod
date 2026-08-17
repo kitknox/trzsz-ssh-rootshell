@@ -35,13 +35,9 @@ require (
 	golang.org/x/term v0.44.0
 )
 
-replace github.com/trzsz/tsshd => /Users/kit/Development/tsshd
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a
 
-// Local fork of kcp-go (v5.6.72 + idle-park patch): the periodic KCP update
-// loop parks itself when the session is idle instead of flushing every
-// interval (10ms) forever, eliminating ~100 timer wakeups/sec per idle
-// session. See sess.go kickUpdater().
-replace github.com/trzsz/kcp-go/v5 => /Users/kit/Development/trzsz-kcp-go
+replace github.com/trzsz/kcp-go/v5 => github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb
 
 require (
 	github.com/UserExistsError/conpty v0.1.4 // indirect
