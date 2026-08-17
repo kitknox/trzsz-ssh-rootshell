@@ -11,6 +11,31 @@ application problems in the
 [rootshell issue tracker](https://github.com/kitknox/rootshell/issues); report
 reproducible upstream `trzsz-ssh` problems to the upstream project.
 
+## Apple binary package
+
+Tagged releases expose two Swift binary-package products:
+
+- `TrzszSSH` for iOS, iOS Simulator, Mac Catalyst, visionOS, and its simulator.
+- `VPNTunnel` for the same platforms plus native macOS.
+
+Add `https://github.com/kitknox/trzsz-ssh-rootshell` as a Swift package and pin
+it to an exact release version. Link the products needed by each target.
+
+### Maintainer release workflow
+
+The frameworks are built together from one reviewed trzsz/tsshd/KCP source
+set. From a sibling `rootshell` checkout, publish a release with:
+
+```bash
+./scripts/release-swift-package.sh <version> \
+  --rootshell-source ../rootshell \
+  --publish
+```
+
+The script requires clean public source repositories, rebuilds through a fresh
+remote Go module cache, audits the artifacts, publishes the GitHub release,
+commits the generated Swift manifest, and creates the matching tag.
+
 ---
 
 ## trzsz-ssh(tssh): Highly OpenSSH-compatible client with extended features
