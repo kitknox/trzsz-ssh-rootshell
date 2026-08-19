@@ -170,7 +170,7 @@ tssh_repackage_static_xcframework() {
         library_dir="$stage/libraries/$identifier"
         headers_dir="$stage/headers/$identifier"
         library="$library_dir/lib${binary_name}.a"
-        module_map="$headers_dir/module.modulemap"
+        module_map="$headers_dir/$binary_name/module.modulemap"
 
         [[ -f "$framework/$binary_name" ]] || tssh_error "missing $binary_name archive in $identifier"
         [[ -d "$framework/Headers" ]] || tssh_error "missing headers in $identifier"
@@ -181,7 +181,6 @@ tssh_repackage_static_xcframework() {
         cp "$framework/Modules/module.modulemap" "$module_map"
         sed -i '' \
             -e 's/^framework module /module /' \
-            -e "s/header \"/header \"$binary_name\\//g" \
             "$module_map"
         create_args+=(-library "$library" -headers "$headers_dir")
     done
@@ -220,7 +219,7 @@ tssh_audit_framework() {
         headers="$framework/$identifier/$headers_path"
         [[ -f "$binary" ]] || tssh_error "missing $library_path in $identifier"
         [[ -f "$headers/$binary_name/$binary_name.h" ]] || tssh_error "missing umbrella header in $identifier"
-        [[ -f "$headers/module.modulemap" ]] || tssh_error "missing module map in $identifier"
+        [[ -f "$headers/$binary_name/module.modulemap" ]] || tssh_error "missing namespaced module map in $identifier"
         [[ ! -d "$framework/$identifier/$binary_name.framework" ]] || tssh_error "$identifier still wraps the archive in a framework"
         file "$binary" | grep -q 'current ar archive' || tssh_error "$identifier is not a static archive"
 
