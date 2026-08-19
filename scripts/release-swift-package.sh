@@ -7,22 +7,20 @@ REPOSITORY="kitknox/trzsz-ssh-rootshell"
 
 VERSION="${1:-}"
 if [[ "$VERSION" == "-h" || "$VERSION" == "--help" ]]; then
-    echo "Usage: $0 <version> [--rootshell-source <path>] [--publish] [--skip-build]"
+    echo "Usage: $0 <version> [--publish] [--skip-build]"
     exit 0
 fi
 if [[ -z "$VERSION" ]]; then
-    echo "Usage: $0 <version> [--rootshell-source <path>] [--publish] [--skip-build]" >&2
+    echo "Usage: $0 <version> [--publish] [--skip-build]" >&2
     exit 1
 fi
 shift
 
-ROOTSHELL_SOURCE="${ROOTSHELL_SOURCE_DIR:-}"
 PUBLISH=false
 SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --rootshell-source) ROOTSHELL_SOURCE="${2:-}"; shift 2 ;;
         --publish) PUBLISH=true; shift ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         *) echo "ERROR: unknown option: $1" >&2; exit 1 ;;
@@ -35,14 +33,10 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
 fi
 TAG="v$VERSION"
 
-if [[ -z "$ROOTSHELL_SOURCE" && -x "$PACKAGE_DIR/../rootshell/scripts/build-trzsz-package.sh" ]]; then
-    ROOTSHELL_SOURCE="$PACKAGE_DIR/../rootshell"
-fi
-if [[ -z "$ROOTSHELL_SOURCE" || ! -x "$ROOTSHELL_SOURCE/scripts/build-trzsz-package.sh" ]]; then
-    echo "ERROR: pass --rootshell-source or set ROOTSHELL_SOURCE_DIR" >&2
+[[ -x "$PACKAGE_DIR/scripts/build-trzsz-package.sh" ]] || {
+    echo "ERROR: package builder is missing: $PACKAGE_DIR/scripts/build-trzsz-package.sh" >&2
     exit 1
-fi
-ROOTSHELL_SOURCE="$(cd "$ROOTSHELL_SOURCE" && pwd)"
+}
 
 for command in git ditto swift plutil; do
     command -v "$command" >/dev/null || { echo "ERROR: required command not found: $command" >&2; exit 1; }
@@ -65,18 +59,18 @@ if [[ "$SKIP_BUILD" == false ]]; then
         BUILD_ARGS+=(--dependency-mode remote)
         rm -rf "$STAGE/go-mod-cache"
         GOMODCACHE="$STAGE/go-mod-cache" \
-            "$ROOTSHELL_SOURCE/scripts/build-trzsz-package.sh" "${BUILD_ARGS[@]}"
+            "$PACKAGE_DIR/scripts/build-trzsz-package.sh" "${BUILD_ARGS[@]}"
     else
         BUILD_ARGS+=(
             --dependency-mode local
             --tsshd-source "$PACKAGE_DIR/../tsshd"
             --kcp-source "$PACKAGE_DIR/../trzsz-kcp-go"
         )
-        "$ROOTSHELL_SOURCE/scripts/build-trzsz-package.sh" "${BUILD_ARGS[@]}"
+        "$PACKAGE_DIR/scripts/build-trzsz-package.sh" "${BUILD_ARGS[@]}"
     fi
 fi
 
-LOCAL_PACKAGE="$ROOTSHELL_SOURCE/.local-packages/trzsz-ssh-rootshell"
+LOCAL_PACKAGE="$PACKAGE_DIR/.build/local-package"
 [[ -f "$LOCAL_PACKAGE/Package.swift" ]] || { echo "ERROR: local package was not built" >&2; exit 1; }
 TRZSZ_RELATIVE="$(sed -n 's/.*path: "\(Artifacts\/[^\"]*\/TrzszSSH\.xcframework\)".*/\1/p' "$LOCAL_PACKAGE/Package.swift")"
 VPN_RELATIVE="$(sed -n 's/.*path: "\(Artifacts\/[^\"]*\/VPNTunnel\.xcframework\)".*/\1/p' "$LOCAL_PACKAGE/Package.swift")"
