@@ -54,6 +54,9 @@ type ForwardConfig struct {
 	BindPort    int    // Port to listen on (must be explicit >0 for remote forwards)
 	TargetHost  string // Host to connect to (unused for dynamic)
 	TargetPort  int    // Port to connect to (unused for dynamic)
+	// RecoverRemoteListener permits waking a stale listener from this session
+	// after its previous forwarder was closed. Leave false for new forwards.
+	RecoverRemoteListener bool
 }
 
 // NewForwardConfig creates a new ForwardConfig (gomobile constructor).
@@ -339,8 +342,11 @@ func (pf *PortForwarder) runRemoteForward(ctx context.Context, af *activeForward
 		return
 	}
 
-	listener, err := pf.transport.client.Listen("tcp", remoteListenAddr)
+	listener, err := listenRemoteForward(ctx, pf.transport.client, remoteListenAddr, cfg.RecoverRemoteListener)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		pf.callback.OnForwardError(cfg.ForwardID, fmt.Sprintf("Remote listen on %s failed: %v", remoteListenAddr, err))
 		pf.removeForwardAndNotify(cfg.ForwardID)
 		return

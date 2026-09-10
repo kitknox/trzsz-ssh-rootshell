@@ -60,7 +60,21 @@ else
     tsshd_revision="$(awk '$1 == "replace" && $2 == "github.com/trzsz/tsshd" { print $NF }' "$TRZSZ_SSH_DIR/go.mod")"
     kcp_revision="$(awk '$1 == "replace" && $2 == "github.com/trzsz/kcp-go/v5" { print $NF }' "$TRZSZ_SSH_DIR/go.mod")"
 fi
-build_id="${trzsz_revision}-${tsshd_revision##*-}-${kcp_revision##*-}"
+# Include working-tree source content: uncommitted binding changes must not
+# reuse an artifact path that Xcode has already cached for the same Git HEAD.
+source_digest="$(python3 - "$TRZSZ_SSH_DIR" <<'PYHASH'
+import hashlib, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+h = hashlib.sha256()
+paths = [root / 'go.mod', root / 'go.sum', root / 'vpntunnel/go.mod', root / 'vpntunnel/go.sum']
+paths += list((root / 'iosbridge').glob('*.go')) + list((root / 'vpntunnel').glob('*.go'))
+for path in sorted(paths):
+    h.update(str(path.relative_to(root)).encode())
+    h.update(path.read_bytes())
+print(h.hexdigest()[:12])
+PYHASH
+)"
+build_id="${trzsz_revision}-${tsshd_revision##*-}-${kcp_revision##*-}-${source_digest}"
 
 PACKAGE_DIR="$PROJECT_DIR/.build/local-package"
 ARTIFACT_DIR="$PACKAGE_DIR/Artifacts/$build_id"
@@ -95,6 +109,7 @@ EOF
 cat > "$PACKAGE_DIR/provenance.json" <<EOF
 {
   "dependencyMode": "$DEPENDENCY_MODE",
+  "clientSourceDigest": "$source_digest",
   "trzszSSHRevision": "$trzsz_revision",
   "tsshdRevision": "$tsshd_revision",
   "kcpGoRevision": "$kcp_revision",

@@ -113,6 +113,7 @@ var (
 	globalStats  *tunnelStats
 	globalConfig *VPNTunnelConfig
 	globalCB     TunnelCallback
+	globalRelay  *Relay
 	globalClient *tsshd.SshUdpClient // TSSH client (nil for SSH mode)
 )
 
@@ -120,6 +121,12 @@ var (
 // configJSON is a serialized VPNTunnelConfig.
 // callback receives tunnel lifecycle events.
 func StartTunnel(configJSON string, callback TunnelCallback) error {
+	return StartTunnelWithRelay(configJSON, callback, nil)
+}
+
+// StartTunnelWithRelay retains a prepared relay on success. On failure the
+// caller must close it; StopTunnel closes the target before releasing the relay.
+func StartTunnelWithRelay(configJSON string, callback TunnelCallback, relay *Relay) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 
@@ -153,7 +160,25 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 	switch cfg.TransportType {
 	case "tssh":
 		// Connect via tsshd (KCP/QUIC)
-		c, err := connectTSSH(cfg)
+		var proxy *tsshd.SshUdpClient
+		if relay != nil {
+			var err error
+			proxy, err = relay.connectedClient()
+			if err != nil {
+				return err
+			}
+			mtu, err := relay.EffectiveMTU(cfg.TSSHMTU, cfg.TSSHMode)
+			if err != nil {
+				return err
+			}
+			if mtu != cfg.TSSHMTU {
+				return fmt.Errorf("target MTU must match relay budget: %d", mtu)
+			}
+		}
+		if cfg.TSSHRelayRequired && proxy == nil {
+			return fmt.Errorf("tssh relay is required")
+		}
+		c, err := connectTSSH(cfg, proxy)
 		if err != nil {
 			return fmt.Errorf("vpntunnel: tssh connect: %w", err)
 		}
@@ -213,6 +238,7 @@ func StartTunnel(configJSON string, callback TunnelCallback) error {
 		return fmt.Errorf("vpntunnel: create stack: %w", err)
 	}
 	globalStack = ts
+	globalRelay = relay
 
 	if callback != nil {
 		callback.OnTunnelReady()
@@ -238,6 +264,11 @@ func StopTunnel() error {
 	if globalClient != nil {
 		globalClient.Close()
 		globalClient = nil
+	}
+
+	if globalRelay != nil {
+		globalRelay.Close()
+		globalRelay = nil
 	}
 
 	globalStack.close()
@@ -344,7 +375,7 @@ func GetEffectiveMTU() int {
 // connectTSSH establishes a tsshd client connection using the config parameters.
 // The VPN extension spawns tsshd via SSH, parses the JSON output, and passes
 // all server info fields through VPNTunnelConfig.
-func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
+func connectTSSH(cfg *VPNTunnelConfig, proxy *tsshd.SshUdpClient) (*tsshd.SshUdpClient, error) {
 	serverInfo := &tsshd.ServerInfo{
 		ServerVer:  cfg.TSSHServerVer,
 		Port:       cfg.TSSHPort,
@@ -369,6 +400,7 @@ func connectTSSH(cfg *VPNTunnelConfig) (*tsshd.SshUdpClient, error) {
 		serverInfo.MTU = uint16(cfg.TSSHMTU)
 	}
 	opts := &tsshd.UdpClientOptions{
+		ProxyClient:      proxy,
 		EnableWarning:    true,
 		TsshdAddr:        addr,
 		ServerInfo:       serverInfo,

@@ -37,18 +37,19 @@ type VPNTunnelConfig struct {
 
 	// TSSH-specific fields (used when TransportType == "tssh")
 	// These come from tsshd's JSON spawn output, parsed by the Swift extension.
-	TSSHHost       string `json:"tsshHost,omitempty"`
-	TSSHPort       int    `json:"tsshPort,omitempty"`
-	TSSHMode       string `json:"tsshMode,omitempty"`       // "KCP" or "QUIC"
-	TSSHServerVer  string `json:"tsshServerVer,omitempty"`  // tsshd version (e.g., "v1.0")
-	TSSHPass       string `json:"tsshPass,omitempty"`       // KCP: hex-encoded password
-	TSSHSalt       string `json:"tsshSalt,omitempty"`       // KCP: hex-encoded salt
-	TSSHServerCert string `json:"tsshServerCert,omitempty"` // QUIC: hex-encoded server cert
-	TSSHClientCert string `json:"tsshClientCert,omitempty"` // QUIC: hex-encoded client cert
-	TSSHClientKey  string `json:"tsshClientKey,omitempty"`  // QUIC: hex-encoded client key
-	TSSHProxyKey   string `json:"tsshProxyKey,omitempty"`   // hex-encoded proxy key
-	TSSHClientID   uint64 `json:"tsshClientID,omitempty"`
-	TSSHServerID   uint64 `json:"tsshServerID,omitempty"`
+	TSSHRelayRequired bool   `json:"tsshRelayRequired,omitempty"`
+	TSSHHost          string `json:"tsshHost,omitempty"`
+	TSSHPort          int    `json:"tsshPort,omitempty"`
+	TSSHMode          string `json:"tsshMode,omitempty"`       // "KCP" or "QUIC"
+	TSSHServerVer     string `json:"tsshServerVer,omitempty"`  // tsshd version (e.g., "v1.0")
+	TSSHPass          string `json:"tsshPass,omitempty"`       // KCP: hex-encoded password
+	TSSHSalt          string `json:"tsshSalt,omitempty"`       // KCP: hex-encoded salt
+	TSSHServerCert    string `json:"tsshServerCert,omitempty"` // QUIC: hex-encoded server cert
+	TSSHClientCert    string `json:"tsshClientCert,omitempty"` // QUIC: hex-encoded client cert
+	TSSHClientKey     string `json:"tsshClientKey,omitempty"`  // QUIC: hex-encoded client key
+	TSSHProxyKey      string `json:"tsshProxyKey,omitempty"`   // hex-encoded proxy key
+	TSSHClientID      uint64 `json:"tsshClientID,omitempty"`
+	TSSHServerID      uint64 `json:"tsshServerID,omitempty"`
 
 	// SSH-specific fields (used when TransportType == "ssh")
 	// The SOCKS5 proxy runs on localhost in the extension process.

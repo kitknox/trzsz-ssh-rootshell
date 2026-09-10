@@ -29,6 +29,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -155,8 +157,8 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 		ClientCert string `json:"ClientCert"`
 		ClientKey  string `json:"ClientKey"`
 		ProxyKey   string `json:"ProxyKey"`
-		ClientID   int64  `json:"ClientID"`
-		ServerID   int64  `json:"ServerID"`
+		ClientID   uint64 `json:"ClientID"`
+		ServerID   uint64 `json:"ServerID"`
 		ProxyMode  string `json:"ProxyMode"`
 		MTU        int    `json:"MTU"`
 	}
@@ -182,8 +184,8 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 	cfg.ClientCert = raw.ClientCert
 	cfg.ClientKey = raw.ClientKey
 	cfg.ProxyKey = raw.ProxyKey
-	cfg.ClientID = raw.ClientID
-	cfg.ServerID = raw.ServerID
+	cfg.ClientID = int64(raw.ClientID)
+	cfg.ServerID = int64(raw.ServerID)
 	cfg.ProxyMode = raw.ProxyMode
 	cfg.Mtu = raw.MTU
 
@@ -389,6 +391,31 @@ func (t *Transport) SetHealthNotifier(n HealthNotifier) {
 // config contains the connection parameters from tsshd JSON output.
 // Returns a Transport that can create sessions.
 func ConnectTransport(config *TransportConfig) (*Transport, error) {
+	return connectTransport(config, nil)
+}
+
+// ConnectTransportViaProxy connects only through proxy; it never falls back to
+// direct UDP. The caller owns the relay and must keep it alive until the target
+// is closed or detached. Keeping this separate preserves the old binding API.
+func ConnectTransportViaProxy(config *TransportConfig, proxy *Transport) (*Transport, error) {
+	if proxy == nil || proxy.closed.Load() || proxy.client == nil {
+		return nil, fmt.Errorf("jump transport is not connected")
+	}
+	return connectTransport(config, proxy)
+}
+
+// EffectiveRelayMTU returns the packet size to pass to the target tsshd command.
+func (t *Transport) EffectiveRelayMTU(requested int, mode string) (int, error) {
+	if t.closed.Load() || t.client == nil {
+		return 0, fmt.Errorf("jump transport is closed")
+	}
+	return resolveRelayMTU(requested, int(t.client.GetMaxDatagramSize()), mode)
+}
+
+func connectTransport(config *TransportConfig, proxy *Transport) (*Transport, error) {
+	if config == nil {
+		return nil, fmt.Errorf("transport config is required")
+	}
 	if err := config.Validate(); err != "" {
 		return nil, fmt.Errorf("invalid config: %s", err)
 	}
@@ -399,7 +426,7 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 	}
 
 	serverInfo := config.toServerInfo()
-	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
+	addr := net.JoinHostPort(strings.Trim(config.Host, "[]"), strconv.Itoa(config.Port))
 
 	// Set timeouts
 	connectTimeout := time.Duration(config.ConnectTimeoutSec) * time.Second
@@ -448,6 +475,16 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 				n.OnDiscard(len(discardedInput), int(discardedOutputLines), int(discardedOutputBytes))
 			}
 		},
+	}
+	if proxy != nil {
+		opts.ProxyClient = proxy.client
+		mtu, err := proxy.EffectiveRelayMTU(config.Mtu, config.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if config.Mtu != mtu {
+			return nil, fmt.Errorf("target MTU must match relay budget: spawn target with --mtu %d", mtu)
+		}
 	}
 	// MTU is now on ServerInfo in upstream, set it there
 	if config.Mtu > 0 {
@@ -505,7 +542,10 @@ func ConnectTransport(config *TransportConfig) (*Transport, error) {
 	}
 
 	transport.client = client
-
+	if proxy != nil && proxy.closed.Load() {
+		client.Detach()
+		return nil, fmt.Errorf("jump transport closed during target connection")
+	}
 	return transport, nil
 }
 
@@ -618,19 +658,13 @@ func (t *Transport) Close() error {
 	return t.client.Close()
 }
 
-// Abandon silently disconnects without sending ANY signals to the server.
-// Use this when preserving the server session for future Attach().
-// Does not close the session, bus stream, SMUX session, or KCP connection —
-// any of those would send FIN/close frames that the server would interpret
-// as the client explicitly disconnecting, killing the session.
-// Resources are cleaned up when the process exits.
+// Abandon releases local transport resources without closing the remote PTY.
+// In particular it must not call TransportSession.Close (which sends exit).
 func (t *Transport) Abandon() {
 	if !t.closed.CompareAndSwap(false, true) {
 		return
 	}
-	// Intentionally do nothing. Don't close session (sends "exit" on bus),
-	// don't close client (sends SMUX/KCP close frames).
-	// Just mark as closed and let the process die silently.
+	t.client.Detach()
 }
 
 // IsClosed returns true if the transport has been closed.
