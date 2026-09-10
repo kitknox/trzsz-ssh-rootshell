@@ -36,8 +36,9 @@ package iosbridge
 //
 // The Swift side gets an opaque int64 reference and drives byte I/O
 // through ExecRead / ExecReadStderr / ExecWrite / ExecCloseStdin /
-// ExecClose, mirroring the StreamLocal* handle-table pattern. No PTY is
-// requested, so stdout and stderr stay separate streams.
+// ExecClose, mirroring the StreamLocal* handle-table pattern. OpenExecPTY
+// additionally requests a PTY and supports ExecResizePTY; its terminal output
+// (including stderr) travels on stdout, just like an interactive session.
 
 import (
 	"fmt"
@@ -45,14 +46,27 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/trzsz/tsshd/tsshd"
+	"golang.org/x/crypto/ssh"
 )
 
 // execChannel is the per-invocation state for one auxiliary exec
 // session: the tsshd session itself, its three stdio pipes, and the
 // exit bookkeeping filled in by the wait goroutine.
+type execSession interface {
+	StdinPipe() (io.WriteCloser, error)
+	StdoutPipe() (io.Reader, error)
+	StderrPipe() (io.Reader, error)
+	RequestPty(string, int, int, ssh.TerminalModes) error
+	Start(string) error
+	WindowChange(int, int) error
+	Close() error
+	Wait() error
+	GetExitCode() int
+}
+
 type execChannel struct {
-	session *tsshd.SshUdpSession
+	session execSession
+	pty     bool
 	stdin   io.WriteCloser
 	stdout  io.Reader
 	stderr  io.Reader
@@ -73,6 +87,20 @@ type execChannel struct {
 // The parameter is named `command`, not `cmd` — see the gomobile
 // `_cmd` SEL collision note on RunCommand in probe.go.
 func (t *Transport) OpenExec(command string) (int64, error) {
+	return t.openExec(command, "", 0, 0)
+}
+
+// OpenExecPTY starts an independent PTY on the existing connection without
+// occupying or replacing Transport.session (the gateway's primary session).
+// No new server protocol is required: SshUdpSession already supports PTYs.
+func (t *Transport) OpenExecPTY(command, term string, rows, cols int) (int64, error) {
+	if term == "" || rows < 1 || rows > 65535 || cols < 1 || cols > 65535 {
+		return 0, fmt.Errorf("invalid auxiliary PTY terminal or size")
+	}
+	return t.openExec(command, term, rows, cols)
+}
+
+func (t *Transport) openExec(command, term string, rows, cols int) (int64, error) {
 	if t.closed.Load() {
 		return 0, fmt.Errorf("transport is closed")
 	}
@@ -83,6 +111,17 @@ func (t *Transport) OpenExec(command string) (int64, error) {
 	session, err := t.client.NewSession()
 	if err != nil {
 		return 0, fmt.Errorf("new session for OpenExec failed: %w", err)
+	}
+
+	return t.startExec(session, command, term, rows, cols)
+}
+
+func (t *Transport) startExec(session execSession, command, term string, rows, cols int) (int64, error) {
+	if term != "" {
+		if err := session.RequestPty(term, rows, cols, nil); err != nil {
+			_ = session.Close()
+			return 0, fmt.Errorf("auxiliary PTY request failed: %w", err)
+		}
 	}
 
 	// All three pipes must be requested before Start — tsshd's
@@ -112,6 +151,7 @@ func (t *Transport) OpenExec(command string) (int64, error) {
 
 	ec := &execChannel{
 		session: session,
+		pty:     term != "",
 		stdin:   stdin,
 		stdout:  stdout,
 		stderr:  stderr,
@@ -210,6 +250,22 @@ func (t *Transport) ExecWrite(ref int64, data []byte) (int32, error) {
 	}
 	n, err := ec.stdin.Write(data)
 	return int32(n), err
+}
+
+// ExecResizePTY changes only this auxiliary PTY's grid. Row/column order
+// matches RequestPty and the main session's WindowChange method.
+func (t *Transport) ExecResizePTY(ref int64, rows, cols int) error {
+	if rows < 1 || rows > 65535 || cols < 1 || cols > 65535 {
+		return fmt.Errorf("invalid auxiliary PTY size")
+	}
+	ec := t.lookupExecChannel(ref)
+	if ec == nil {
+		return fmt.Errorf("unknown exec channel %d", ref)
+	}
+	if !ec.pty {
+		return fmt.Errorf("exec channel %d has no PTY", ref)
+	}
+	return ec.session.WindowChange(rows, cols)
 }
 
 // ExecCloseStdin closes only the command's stdin, delivering EOF to the
