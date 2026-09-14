@@ -27,6 +27,7 @@ package vpntunnel
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // VPNTunnelConfig is the JSON-serializable configuration for the VPN tunnel.
@@ -59,6 +60,10 @@ type VPNTunnelConfig struct {
 	// Zero means use default (1400). Both client and server must match.
 	TSSHMTU int `json:"trzszMTU,omitempty"`
 
+	// Client establishment, path-renewal and stream-opening timeout.
+	// Zero or invalid values preserve the existing 30-second default.
+	ConnectTimeoutSec int `json:"connectTimeoutSec,omitempty"`
+
 	// Shared fields
 	DNSServers     []string `json:"dnsServers,omitempty"`
 	ExcludedRoutes []string `json:"excludedRoutes,omitempty"` // CIDRs to exclude
@@ -82,4 +87,12 @@ func ParseConfig(configJSON string) (*VPNTunnelConfig, error) {
 	// MTU <= 0 means "auto-resolve from transport" for TSSH.
 	// The default (1500) is applied in StartTunnel after auto-resolution.
 	return &cfg, nil
+}
+
+// connectTimeout keeps the profile bounds and default consistent with Swift.
+func (c *VPNTunnelConfig) connectTimeout() time.Duration {
+	if c.ConnectTimeoutSec < 1 || c.ConnectTimeoutSec > 120 {
+		return 30 * time.Second
+	}
+	return time.Duration(c.ConnectTimeoutSec) * time.Second
 }

@@ -404,7 +404,7 @@ func connectTSSH(cfg *VPNTunnelConfig, proxy *tsshd.SshUdpClient) (*tsshd.SshUdp
 		EnableWarning:    true,
 		TsshdAddr:        addr,
 		ServerInfo:       serverInfo,
-		ConnectTimeout:   30 * time.Second,
+		ConnectTimeout:   cfg.connectTimeout(),
 		AliveTimeout:     24 * time.Hour,
 		HeartbeatTimeout: 3 * time.Second,
 		IntervalTime:     1 * time.Second,
@@ -424,6 +424,9 @@ func connectTSSH(cfg *VPNTunnelConfig, proxy *tsshd.SshUdpClient) (*tsshd.SshUdp
 		}
 	}
 
+	if dl := getDebugLogger(); dl != nil {
+		dl.OnDebug(fmt.Sprintf("[vpntunnel] tssh connect timeout=%v", opts.ConnectTimeout))
+	}
 	c, err := tsshd.NewSshUdpClient(opts)
 	if err != nil {
 		return nil, fmt.Errorf("tssh client connect to %s: %w", addr, err)
