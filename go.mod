@@ -35,7 +35,7 @@ require (
 	golang.org/x/term v0.44.0
 )
 
-replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20260915151953-d54edf25b3ef
 
 replace github.com/trzsz/kcp-go/v5 => github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb
 

@@ -296,6 +296,38 @@ func (t *Transport) ExecExitCode(ref int64) int {
 	}
 }
 
+// ExecSessionID returns the remote session ID behind an exec channel, or 0
+// for a channel whose session does not expose one. Callers persist this so a
+// later run can reap a channel this one leaves behind; see ExitSession.
+func (t *Transport) ExecSessionID(ref int64) int64 {
+	ec := t.lookupExecChannel(ref)
+	if ec == nil {
+		return 0
+	}
+	ided, ok := ec.session.(interface{ GetID() uint64 })
+	if !ok {
+		return 0
+	}
+	return int64(ided.GetID())
+}
+
+// ExitSession asks the server to end the session with this ID, whether or not
+// this transport owns it. An attachable tsshd keeps a departed client's
+// sessions running for a reattach which, for an auxiliary exec channel, never
+// comes: nothing reads its output and the process stays up for the life of the
+// server. A new run reaps its predecessor's channels by ID. Session IDs are
+// issued by the server, so an ID saved by an earlier run can never name a
+// session this one opened.
+func (t *Transport) ExitSession(id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid session id %d", id)
+	}
+	if t.closed.Load() || t.client == nil {
+		return fmt.Errorf("transport is closed")
+	}
+	return t.client.ExitSession(uint64(id))
+}
+
 // ExecClose tears down the exec channel: closes stdin, closes the
 // session (which asks the server to end the process), waits briefly for
 // the exit notification, and removes the channel from the handle table.
