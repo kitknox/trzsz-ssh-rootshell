@@ -867,6 +867,30 @@ func (s *TransportSession) WindowChange(rows, cols int) error {
 	return s.session.WindowChange(rows, cols)
 }
 
+// RedrawScreen asks the remote application to repaint the screen, by briefly
+// resizing the PTY and restoring its size.
+//
+// With discardPreviousOutput set, output produced before the repaint never
+// reaches the output callback: tsshd drops what it holds and injects a marker
+// ahead of the repaint, and the client drops everything received before that
+// marker, including bytes already in flight. The app uses this on resume so a
+// backlog queued while it was suspended is replaced by a single fresh frame.
+// Servers older than protocol version 1 repaint without the discard.
+//
+// Thread-safe: uses mutex to prevent interleaving with Write and WindowChange.
+func (s *TransportSession) RedrawScreen(discardPreviousOutput bool) error {
+	if s.closed.Load() {
+		return fmt.Errorf("session is closed")
+	}
+	if !s.started.Load() {
+		return fmt.Errorf("session not started")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.session.RedrawScreen(discardPreviousOutput)
+}
+
 // SetOutputCallback sets the callback for receiving session output.
 func (s *TransportSession) SetOutputCallback(callback TSSHOutputCallback) {
 	s.mu.Lock()
