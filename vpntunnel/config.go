@@ -33,7 +33,8 @@ import (
 // VPNTunnelConfig is the JSON-serializable configuration for the VPN tunnel.
 // Shared between the Swift main app and the Go netstack layer.
 type VPNTunnelConfig struct {
-	// TransportType selects the SSH transport: "ssh" or "tssh"
+	// TransportType selects the transport: "ssh", "tssh", or "direct" (dial
+	// upstream from the extension itself, no remote server)
 	TransportType string `json:"transportType"`
 
 	// TSSH-specific fields (used when TransportType == "tssh")
@@ -56,6 +57,9 @@ type VPNTunnelConfig struct {
 	// The SOCKS5 proxy runs on localhost in the extension process.
 	SOCKS5Address string `json:"socks5Address,omitempty"` // e.g., "127.0.0.1:1080"
 
+	// Direct-specific: interface index to bind upstream sockets to (0 = unbound).
+	DirectBoundInterface int `json:"directBoundInterface,omitempty"`
+
 	// TSSH packet MTU (separate from TUN device MTU)
 	// Zero means use default (1400). Both client and server must match.
 	TSSHMTU int `json:"trzszMTU,omitempty"`
@@ -75,13 +79,26 @@ type VPNTunnelConfig struct {
 	BlockQUIC bool `json:"blockQUIC,omitempty"`
 }
 
+// initialCaptureConfig returns the optional "capture" object of the tunnel
+// config (same JSON as CaptureConfigure), so capture resumes from the first
+// flow after an extension restart. Kept off VPNTunnelConfig, which gomobile binds.
+func initialCaptureConfig(configJSON string) json.RawMessage {
+	var wrapper struct {
+		Capture json.RawMessage `json:"capture"`
+	}
+	if json.Unmarshal([]byte(configJSON), &wrapper) != nil {
+		return nil
+	}
+	return wrapper.Capture
+}
+
 // ParseConfig deserializes a JSON config string into VPNTunnelConfig.
 func ParseConfig(configJSON string) (*VPNTunnelConfig, error) {
 	var cfg VPNTunnelConfig
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return nil, fmt.Errorf("vpntunnel: parse config: %w", err)
 	}
-	if cfg.TransportType != "ssh" && cfg.TransportType != "tssh" {
+	if cfg.TransportType != "ssh" && cfg.TransportType != "tssh" && cfg.TransportType != "direct" {
 		return nil, fmt.Errorf("vpntunnel: invalid transport type: %q", cfg.TransportType)
 	}
 	// MTU <= 0 means "auto-resolve from transport" for TSSH.

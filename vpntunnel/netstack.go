@@ -33,10 +33,12 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
@@ -235,6 +237,7 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 			}
 			data := pkt.ToView().AsSlice()
 			stats.addBytesIn(len(data))
+			capturePacket(1, data)
 			entry := packetEntry{
 				data:   append([]byte(nil), data...), // copy before DecRef
 				family: family,
@@ -276,6 +279,7 @@ func (ts *tunnelStack) injectPacket(data []byte, family int) {
 	}
 
 	ts.stats.addBytesOut(len(data))
+	capturePacket(0, data)
 
 	var protocol tcpip.NetworkProtocolNumber
 	switch family {
@@ -363,7 +367,41 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	defer connCancel()
 
 	id := r.ID()
-	dstAddr := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
+	dstIP := id.LocalAddress.String()
+	dstAddr := net.JoinHostPort(dstIP, strconv.Itoa(int(id.LocalPort)))
+	cs := captureCur.Load()
+	env := currentCaptureEnv()
+	peek := cs != nil && env != nil && shouldPeek(cs, dstIP, int(id.LocalPort))
+
+	// IPv6: dial before accepting, so a transport without IPv6 answers with
+	// RST and Happy Eyeballs falls back instead of seeing a dead connection.
+	// Server transports may lack IPv6 entirely and a failed channel open can
+	// take seconds, so they refuse it outright; only Direct tries.
+	var preDialed net.Conn
+	if id.LocalAddress.Len() == 16 {
+		if _, direct := dialer.(*directDialer); !direct {
+			r.Complete(true)
+			return
+		}
+		c, err := dialer.DialTCP(connCtx, dstAddr)
+		if err != nil {
+			r.Complete(true)
+			return
+		}
+		preDialed = c
+	}
+	dial := func(ctx context.Context) (net.Conn, error) {
+		if c := preDialed; c != nil {
+			preDialed = nil
+			return c, nil
+		}
+		return dialer.DialTCP(ctx, dstAddr)
+	}
+	defer func() {
+		if preDialed != nil {
+			preDialed.Close()
+		}
+	}()
 
 	var wq waiter.Queue
 	ep, tcpipErr := r.CreateEndpoint(&wq)
@@ -378,12 +416,39 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	stats.connOpenedTCP()
 	defer stats.connClosedTCP()
 
-	// Dial the remote
-	remote, err := dialer.DialTCP(connCtx, dstAddr)
-	if err != nil {
-		log.Printf("vpntunnel: tcp dial %s: %v", dstAddr, err)
+	if env != nil {
+		flowID := env.flows.add(ep, connCancel)
+		defer env.flows.remove(flowID)
+	}
+
+	if peek {
+		serveCapturedFlow(&flowCtx{
+			ctx:     connCtx,
+			cs:      cs,
+			env:     env,
+			client:  gonet.NewTCPConn(&wq, ep),
+			dstIP:   dstIP,
+			dstPort: int(id.LocalPort),
+			dstAddr: dstAddr,
+			srcAddr: net.JoinHostPort(id.RemoteAddress.String(), strconv.Itoa(int(id.RemotePort))),
+			start:   time.Now(),
+			dial:    dial,
+		})
 		return
 	}
+
+	// Dial the remote
+	startMs := nowMs()
+	remote, err := dial(connCtx)
+	if err != nil {
+		log.Printf("vpntunnel: tcp dial %s: %v", dstAddr, err)
+		recordRawTunnel(cs, env, id.RemoteAddress.String(), id.RemotePort, dstIP, dstAddr, startMs, 0, 0, err)
+		return
+	}
+	var bytesUp, bytesDown atomic.Int64
+	defer func() {
+		recordRawTunnel(cs, env, id.RemoteAddress.String(), id.RemotePort, dstIP, dstAddr, startMs, bytesUp.Load(), bytesDown.Load(), nil)
+	}()
 	// Bridge netstack endpoint ↔ remote connection
 	done := make(chan struct{}, 2)
 
@@ -407,6 +472,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 							wq.EventUnregister(&w)
 							return
 						}
+						bytesUp.Add(int64(n))
 					}
 					break
 				}
@@ -437,6 +503,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 			_ = remote.SetReadDeadline(time.Now().Add(tcpIdleTimeout))
 			n, err := remote.Read(buf)
 			if n > 0 {
+				bytesDown.Add(int64(n))
 				// Write all data to gVisor endpoint, handling partial writes
 				// and back-pressure. ep.Write() with default Atomic=false may
 				// write fewer bytes than requested (partial write, nil error)

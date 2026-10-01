@@ -5,6 +5,7 @@ go 1.25.5
 require (
 	github.com/trzsz/tsshd v0.1.7-0.20260125135324-348ee5b4ec22
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
+	golang.org/x/net v0.56.0
 	gvisor.dev/gvisor v0.0.0-20250205023644-9414b50a5633
 )
 
@@ -32,7 +33,6 @@ require (
 	github.com/trzsz/smux v1.6.0 // indirect
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect

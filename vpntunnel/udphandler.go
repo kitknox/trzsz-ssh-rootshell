@@ -30,6 +30,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,7 +102,39 @@ func (f *udpForwarder) allowFlow(dstPort uint16) bool {
 		// SSH mode: only DNS (answered via DNS-over-TCP) is supported.
 		return dstPort == 53
 	}
-	return !(f.blockQUIC && dstPort == 443)
+	return !((f.blockQUIC || captureBlocking()) && dstPort == 443)
+}
+
+// closePort tears down every tracked UDP flow to dstPort (e.g. QUIC when
+// capture starts, so browsers retry over TCP).
+func (f *udpForwarder) closePort(dstPort int) {
+	suffix := ":" + strconv.Itoa(dstPort)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, tracker := range f.conns {
+		if strings.HasSuffix(key, suffix) {
+			if tracker.remote != nil {
+				_ = tracker.remote.Close()
+			}
+			tracker.cancel()
+			delete(f.conns, key)
+		}
+	}
+}
+
+// observeDNSResponse feeds the capture DNS cache.
+func observeDNSResponse(msg []byte) {
+	if env := currentCaptureEnv(); env != nil {
+		env.dns.observe(msg)
+	}
+}
+
+// interceptDNSQuery returns a synthesized answer for queries capture blocks.
+func interceptDNSQuery(query []byte) []byte {
+	if !captureBlocking() {
+		return nil
+	}
+	return synthesizeHTTPSNoData(query)
 }
 
 // handleUDP is the UDP forwarder function registered with gVisor.
@@ -169,7 +202,8 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 			return
 		}
 
-		// TSSH mode: native UDP forwarding
+		// TSSH / direct mode: native UDP forwarding
+		isDNS := f.isDNS(dstAddr)
 		remote, err := f.dialer.DialUDP(ctx, dstAddr)
 		if err != nil {
 			log.Printf("vpntunnel: udp dial %s: %v", dstAddr, err)
@@ -213,6 +247,12 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 					f.mu.Lock()
 					tracker.lastUse = time.Now()
 					f.mu.Unlock()
+					if isDNS {
+						if answer := interceptDNSQuery(buf[:n]); answer != nil {
+							ep.Write(bytes.NewReader(answer), tcpip.WriteOptions{})
+							continue
+						}
+					}
 					if err := remote.Write(buf[:n]); err != nil {
 						return
 					}
@@ -242,6 +282,9 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 						continue
 					}
 					data := buf[:n]
+					if isDNS {
+						observeDNSResponse(data)
+					}
 					ep.Write(bytes.NewReader(data), tcpip.WriteOptions{})
 				}
 			}
@@ -311,6 +354,10 @@ func (f *udpForwarder) handleDNSOverTCP(ctx context.Context, ep tcpip.Endpoint, 
 	if len(query) < 12 {
 		return
 	}
+	if answer := interceptDNSQuery(query); answer != nil {
+		ep.Write(bytes.NewReader(answer), tcpip.WriteOptions{})
+		return
+	}
 
 	// Connect to DNS server over TCP
 	conn, err := f.tcpDial.DialTCP(ctx, dstAddr)
@@ -348,6 +395,7 @@ func (f *udpForwarder) handleDNSOverTCP(ctx context.Context, ep tcpip.Endpoint, 
 	}
 
 	// Write DNS response back to netstack as UDP
+	observeDNSResponse(resp)
 	ep.Write(bytes.NewReader(resp), tcpip.WriteOptions{})
 }
 

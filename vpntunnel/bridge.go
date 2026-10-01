@@ -140,13 +140,8 @@ func StartTunnelWithRelay(configJSON string, callback TunnelCallback, relay *Rel
 	}
 
 	// Tune GC for extension memory constraints to reduce OOM terminations.
-	if cfg.TransportType == "tssh" {
-		debug.SetMemoryLimit(tsshHeapLimitBytes)
-		debug.SetGCPercent(tsshGCPercent)
-	} else {
-		debug.SetMemoryLimit(sshHeapLimitBytes)
-		debug.SetGCPercent(sshGCPercent)
-	}
+	// Direct mode has no Citadel in-process, so Go owns the whole budget like TSSH.
+	applyBaseMemoryLimits(cfg.TransportType)
 
 	stats := &tunnelStats{}
 	globalStats = stats
@@ -220,6 +215,11 @@ func StartTunnelWithRelay(configJSON string, callback TunnelCallback, relay *Rel
 		tcpDial = &socks5Dialer{proxyAddr: cfg.SOCKS5Address}
 		udpDial = nil // no UDP for SSH
 
+	case "direct":
+		d := &directDialer{boundIf: cfg.DirectBoundInterface}
+		tcpDial = d
+		udpDial = d
+
 	default:
 		return fmt.Errorf("vpntunnel: unsupported transport: %s", cfg.TransportType)
 	}
@@ -239,6 +239,13 @@ func StartTunnelWithRelay(configJSON string, callback TunnelCallback, relay *Rel
 	}
 	globalStack = ts
 	globalRelay = relay
+
+	resetCaptureTunnelState(cfg.TransportType, ts)
+	if capture := initialCaptureConfig(configJSON); len(capture) > 0 && string(capture) != "null" {
+		if err := applyCaptureConfig(capture); err != nil {
+			log.Printf("vpntunnel: initial capture config: %v", err)
+		}
+	}
 
 	if callback != nil {
 		callback.OnTunnelReady()
@@ -270,6 +277,8 @@ func StopTunnel() error {
 		globalRelay.Close()
 		globalRelay = nil
 	}
+
+	closeCapture("tunnelStopped", false)
 
 	globalStack.close()
 	globalStack = nil
@@ -358,7 +367,7 @@ func GetStatus() string {
 	if cfg != nil {
 		transportType = cfg.TransportType
 	}
-	return stats.toStatus(connected, transportType)
+	return stats.toStatus(connected, transportType, currentCaptureStatus())
 }
 
 // GetEffectiveMTU returns the resolved TUN device MTU after StartTunnel.

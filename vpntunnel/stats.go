@@ -65,6 +65,13 @@ type TunnelStatus struct {
 	GoLiveObjects     int64  `json:"goLiveObjects"`
 }
 
+// statusJSON adds capture counters without changing TunnelStatus, which
+// gomobile binds (it can't bind a field of an unexported type).
+type statusJSON struct {
+	TunnelStatus
+	Capture *captureStatus `json:"capture,omitempty"`
+}
+
 func (s *tunnelStats) addBytesIn(n int) {
 	s.bytesIn.Add(int64(n))
 }
@@ -109,7 +116,7 @@ func (s *tunnelStats) udpRejected() {
 	s.udpRejects.Add(1)
 }
 
-func (s *tunnelStats) toStatus(connected bool, transportType string) string {
+func (s *tunnelStats) toStatus(connected bool, transportType string, capture *captureStatus) string {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	liveObjects := int64(0)
@@ -137,6 +144,6 @@ func (s *tunnelStats) toStatus(connected bool, transportType string) string {
 		GoGoroutines:      runtime.NumGoroutine(),
 		GoLiveObjects:     liveObjects,
 	}
-	b, _ := json.Marshal(status)
+	b, _ := json.Marshal(statusJSON{TunnelStatus: status, Capture: capture})
 	return string(b)
 }
