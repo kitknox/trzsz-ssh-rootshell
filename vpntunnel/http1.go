@@ -415,16 +415,45 @@ type spillBuffer struct {
 	err       error
 }
 
+// rawLimit bounds the framed bytes too: tiny chunks with long extensions or
+// large trailers must not grow the buffer while the payload stays small.
+func (s *spillBuffer) rawLimit() int { return s.limit + 64<<10 }
+
+// spill writes the head and everything buffered so far, then streams the rest.
+func (s *spillBuffer) spill() error {
+	if err := s.onSpill(); err != nil {
+		s.err = err
+		return err
+	}
+	if _, err := s.dst.Write(s.raw.Bytes()); err != nil {
+		s.err = err
+		return err
+	}
+	if s.sink != nil {
+		_, _ = s.sink.Write(s.data.Bytes())
+	}
+	s.raw.Reset()
+	s.data.Reset()
+	s.spilled = true
+	return nil
+}
+
 type spillRaw struct{ s *spillBuffer }
 
 func (w spillRaw) Write(p []byte) (int, error) {
-	if w.s.err != nil {
-		return 0, w.s.err
+	s := w.s
+	if s.err != nil {
+		return 0, s.err
 	}
-	if w.s.spilled {
-		return w.s.dst.Write(p)
+	if !s.spilled && s.raw.Len()+len(p) > s.rawLimit() {
+		if err := s.spill(); err != nil {
+			return 0, err
+		}
 	}
-	return w.s.raw.Write(p)
+	if s.spilled {
+		return s.dst.Write(p)
+	}
+	return s.raw.Write(p)
 }
 
 type spillData struct{ s *spillBuffer }
@@ -439,20 +468,9 @@ func (w spillData) Write(p []byte) (int, error) {
 	}
 	s.data.Write(p)
 	if s.data.Len() > s.limit {
-		if err := s.onSpill(); err != nil {
-			s.err = err
+		if err := s.spill(); err != nil {
 			return 0, err
 		}
-		if _, err := s.dst.Write(s.raw.Bytes()); err != nil {
-			s.err = err
-			return 0, err
-		}
-		if s.sink != nil {
-			_, _ = s.sink.Write(s.data.Bytes())
-		}
-		s.raw.Reset()
-		s.data.Reset()
-		s.spilled = true
 	}
 	return len(p), nil
 }

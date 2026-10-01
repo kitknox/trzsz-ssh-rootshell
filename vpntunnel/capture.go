@@ -228,6 +228,16 @@ func closeCapture(reason string, final bool) {
 	}
 }
 
+// liveRewrites returns the rewrite rules in force right now (none once capture
+// stops), so rule edits reach kept-alive connections at their next request.
+func liveRewrites() *rewriteSet {
+	cs := captureCur.Load()
+	if cs == nil || !cs.cfg.Enabled {
+		return nil
+	}
+	return cs.rewrites
+}
+
 // capturePacket records a TUN packet when pcap capture is on. dir: 0 = from
 // apps into the tunnel, 1 = from the tunnel back to apps.
 func capturePacket(dir byte, data []byte) {

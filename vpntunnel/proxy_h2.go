@@ -50,6 +50,8 @@ type h2TxKey struct{}
 
 type h2Tx struct {
 	id         string
+	rec        *recorder   // the session the request was recorded in
+	rewrites   *rewriteSet // rules in force when the stream started
 	resRules   []*compiledRewrite
 	resApplied []string
 	resSink    *bodySink
@@ -125,9 +127,9 @@ func serveHTTP2(fc *flowCtx, client *tls.Conn, up *tls.Conn, meta *connMeta) {
 
 func (p *h2Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fc, meta := p.fc, p.meta
-	cs := fc.cs
 	rec := fc.rec()
-	tx := &h2Tx{id: rec.nextTxID()}
+	tx := &h2Tx{id: rec.nextTxID(), rec: rec, rewrites: liveRewrites()}
+	rw := tx.rewrites
 	started := nowMs()
 	reused := p.served.Add(1) > 1
 
@@ -137,13 +139,13 @@ func (p *h2Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Host = host
 	}
 	url := "https://" + strings.ToLower(host) + r.URL.RequestURI()
-	reqRules := cs.rewrites.matching("request", url)
-	tx.resRules = cs.rewrites.matching("response", url)
+	reqRules := rw.matching("request", url)
+	tx.resRules = rw.matching("response", url)
 	reqApplied := applyHeaderRewrites(reqRules, httpHeaderEditor(r.Header))
 
-	if hasBodyRule(reqRules) && r.Body != nil && r.ContentLength != 0 && cs.rewrites.acquire() {
+	if hasBodyRule(reqRules) && r.Body != nil && r.ContentLength != 0 && rw.acquire() {
 		ids, body, n := rewriteStream(r.Body, r.Header, reqRules)
-		cs.rewrites.release()
+		rw.release()
 		r.Body = body
 		if n >= 0 {
 			r.ContentLength = n
@@ -187,12 +189,11 @@ func (p *h2Proxy) modifyResponse(resp *http.Response) error {
 	if !ok {
 		return nil
 	}
-	cs := p.fc.cs
-	rec := p.fc.rec()
+	rec := tx.rec
 	tx.resApplied = applyHeaderRewrites(tx.resRules, httpHeaderEditor(resp.Header))
-	if hasBodyRule(tx.resRules) && resp.Body != nil && cs.rewrites.acquire() {
+	if hasBodyRule(tx.resRules) && resp.Body != nil && tx.rewrites.acquire() {
 		ids, body, n := rewriteStream(resp.Body, resp.Header, tx.resRules)
-		cs.rewrites.release()
+		tx.rewrites.release()
 		resp.Body = body
 		if n >= 0 {
 			resp.ContentLength = n

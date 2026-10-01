@@ -83,6 +83,10 @@ type recorder struct {
 	rejected    atomic.Int64
 	failures    atomic.Int64
 
+	txMu    sync.Mutex
+	pending map[string]*pendingTx
+	swept   map[string]bool // ended by shutdown; their own txEnd is dropped
+
 	// writer goroutine only
 	files map[string]*os.File
 	order []string
@@ -314,6 +318,7 @@ func (r *recorder) close(kind, reason string) {
 	if r == nil {
 		return
 	}
+	r.endPendingTx()
 	if r.active.Load() {
 		r.event(evStop{T: kind, TS: nowMs(), Reason: reason})
 	}
@@ -363,42 +368,53 @@ func (w keylogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// bodySink stores up to max bytes of one body and counts the rest.
+// bodySink stores up to max bytes of one body and counts the rest. Counters
+// are atomic because stopping reads them while the flow is still writing.
 type bodySink struct {
 	r         *recorder
 	rel       string
 	max       int64
-	stored    int64
-	total     int64
-	truncated bool
+	stored    atomic.Int64
+	total     atomic.Int64
+	truncated atomic.Bool
 }
 
 func (r *recorder) newBodySink(txID, ext string) *bodySink {
 	if r == nil {
 		return nil
 	}
-	return &bodySink{r: r, rel: "bodies/" + txID + "." + ext, max: r.maxBody.Load()}
+	s := &bodySink{r: r, rel: "bodies/" + txID + "." + ext, max: r.maxBody.Load()}
+	r.txMu.Lock()
+	t := r.openTx(txID)
+	if ext == "req" {
+		t.req = s
+	} else {
+		t.res = s
+	}
+	r.txMu.Unlock()
+	return s
 }
 
 func (s *bodySink) Write(p []byte) (int, error) {
 	if s == nil {
 		return len(p), nil
 	}
-	s.total += int64(len(p))
-	room := s.max - s.stored
+	s.total.Add(int64(len(p)))
+	stored := s.stored.Load()
+	room := s.max - stored
 	if room <= 0 {
 		if len(p) > 0 {
-			s.truncated = true
+			s.truncated.Store(true)
 		}
 		return len(p), nil
 	}
 	k := int64(len(p))
 	if k > room {
 		k = room
-		s.truncated = true
+		s.truncated.Store(true)
 	}
 	s.r.appendFile(s.rel, append([]byte(nil), p[:k]...), true)
-	s.stored += k
+	s.stored.Add(k)
 	return len(p), nil
 }
 
@@ -406,11 +422,89 @@ func (s *bodySink) finish() (file string, stored, total int64, truncated bool) {
 	if s == nil {
 		return "", 0, 0, false
 	}
-	if s.stored > 0 {
+	if s.stored.Load() > 0 {
 		s.r.closeFile(s.rel)
 		file = s.rel
 	}
-	return file, s.stored, s.total, s.truncated
+	return file, s.stored.Load(), s.total.Load(), s.truncated.Load()
+}
+
+// snapshot reports what has been stored so far without closing the file.
+func (s *bodySink) snapshot() (file string, stored, total int64) {
+	if s == nil {
+		return "", 0, 0
+	}
+	if s.stored.Load() > 0 {
+		file = s.rel
+	}
+	return file, s.stored.Load(), s.total.Load()
+}
+
+// pendingTx is a transaction whose txEnd hasn't been written yet.
+type pendingTx struct {
+	req, res *bodySink
+	ws       bool
+}
+
+// openTx returns (creating) the pending entry; txMu must be held.
+func (r *recorder) openTx(txID string) *pendingTx {
+	if r.pending == nil {
+		r.pending = make(map[string]*pendingTx)
+	}
+	t, ok := r.pending[txID]
+	if !ok {
+		t = &pendingTx{}
+		r.pending[txID] = t
+	}
+	return t
+}
+
+func (r *recorder) markWebSocket(txID string) {
+	if r == nil {
+		return
+	}
+	r.txMu.Lock()
+	r.openTx(txID).ws = true
+	r.txMu.Unlock()
+}
+
+// endTxOnce writes a transaction's own txEnd unless shutdown already ended it.
+// Claim and enqueue happen under txMu, and shutdown sweeps under txMu before
+// the recorder stops accepting, so exactly one txEnd is ever written.
+func (r *recorder) endTxOnce(txID string, ev evTxEnd) {
+	if r == nil {
+		return
+	}
+	r.txMu.Lock()
+	defer r.txMu.Unlock()
+	if r.swept[txID] {
+		return
+	}
+	delete(r.pending, txID)
+	r.event(ev)
+}
+
+// endPendingTx writes txEnd for transactions still in flight, so bodies
+// saved so far stay reachable after recording stops.
+func (r *recorder) endPendingTx() {
+	r.txMu.Lock()
+	pending := r.pending
+	r.pending = nil
+	if r.swept == nil {
+		r.swept = make(map[string]bool, len(pending))
+	}
+	for id := range pending {
+		r.swept[id] = true
+	}
+	r.txMu.Unlock()
+	for id, t := range pending {
+		// Unfinished bodies are partial by definition.
+		ev := evTxEnd{T: "txEnd", ID: id, TS: nowMs(), WS: t.ws, Note: "recording stopped before this finished",
+			ReqTruncated: true, ResTruncated: true}
+		ev.ReqBodyFile, _, ev.ReqBytes = t.req.snapshot()
+		ev.ResBodyFile, _, ev.ResBytes = t.res.snapshot()
+		r.event(ev)
+	}
 }
 
 // Index events. Field names are mirrored by the Swift CaptureProtocol types.

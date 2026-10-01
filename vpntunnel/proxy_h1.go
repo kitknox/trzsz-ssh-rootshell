@@ -52,7 +52,6 @@ func (c readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 // serveHTTP1 proxies HTTP/1.x requests on one client connection. up may be nil
 // for plain HTTP, in which case the upstream is dialed on the first request.
 func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
-	cs := fc.cs
 	clientIdle := newIdleConn(client, tcpIdleTimeout)
 	cr := bufio.NewReaderSize(clientIdle, h1BufferSize)
 	var upIdle *idleConn
@@ -89,8 +88,9 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 		}
 		url := buildURL(meta.scheme, host, req.target)
 
-		reqRules := cs.rewrites.matching("request", url)
-		resRules := cs.rewrites.matching("response", url)
+		rw := liveRewrites()
+		reqRules := rw.matching("request", url)
+		resRules := rw.matching("response", url)
 		var reqApplied, resApplied []string
 		headChanged := false
 		if ids := applyHeaderRewrites(reqRules, &req.headers); len(ids) > 0 {
@@ -134,7 +134,7 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 		reqSink := rec.newBodySink(txID, "req")
 		reqBodyDone := make(chan error, 1)
 		bufferReq := hasBodyRule(reqRules) && reqKind != framingNone
-		if bufferReq && cs.rewrites.acquire() {
+		if bufferReq && rw.acquire() {
 			if hasToken(req.headers.tokens("Expect"), "100-continue") {
 				req.headers.del("Expect")
 				headChanged = true
@@ -153,7 +153,7 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 					}
 					return rawHead
 				})
-			cs.rewrites.release()
+			rw.release()
 			reqApplied = append(reqApplied, ids...)
 			reqBodyDone <- err
 			if err != nil {
@@ -241,15 +241,14 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 			upIdle.setIdle(longLivedIdle)
 			var outTap, inTap io.Writer = io.Discard, io.Discard
 			if rec != nil && isWS {
+				rec.markWebSocket(txID)
 				outTap = newWSTap(rec, txID, "out")
 				inTap = newWSTap(rec, txID, "in")
 			}
 			clientSide := readerConn{Conn: clientIdle, r: io.TeeReader(cr, outTap)}
 			upSide := readerConn{Conn: upIdle, r: io.TeeReader(ur, inTap)}
 			upBytes, downBytes := relayConns(fc.ctx, clientSide, clientIdle, upSide)
-			if rec != nil {
-				rec.event(evTxEnd{T: "txEnd", ID: txID, TS: nowMs(), ReqBytes: upBytes, ResBytes: downBytes, WS: isWS})
-			}
+			rec.endTxOnce(txID, evTxEnd{T: "txEnd", ID: txID, TS: nowMs(), ReqBytes: upBytes, ResBytes: downBytes, WS: isWS})
 			return
 		}
 
@@ -264,7 +263,7 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 		resSink := rec.newBodySink(txID, "res")
 		var bodyErr error
 		note := ""
-		if bufferRes && resKind != framingNone && cs.rewrites.acquire() {
+		if bufferRes && resKind != framingNone && rw.acquire() {
 			var sent []byte
 			ids, err := forwardBufferedBody(client, ur, resKind, resLen, resSink, resRules, res.headers.get("Content-Encoding"),
 				func(newBody []byte) []byte {
@@ -280,7 +279,7 @@ func serveHTTP1(fc *flowCtx, client net.Conn, up net.Conn, meta *connMeta) {
 					}
 					return sent
 				})
-			cs.rewrites.release()
+			rw.release()
 			resApplied = append(resApplied, ids...)
 			emitResponse(sent)
 			bodyErr = err
@@ -370,7 +369,7 @@ func endTx(rec *recorder, txID string, reqSink, resSink *bodySink, errText strin
 	ev := evTxEnd{T: "txEnd", ID: txID, TS: nowMs(), Error: errText, WS: ws, Note: note}
 	ev.ReqBodyFile, _, ev.ReqBytes, ev.ReqTruncated = reqSink.finish()
 	ev.ResBodyFile, _, ev.ResBytes, ev.ResTruncated = resSink.finish()
-	rec.event(ev)
+	rec.endTxOnce(txID, ev)
 }
 
 func recordTxFailure(rec *recorder, txID string, meta *connMeta, req *reqHead, url, host string, started float64, errText string) {
@@ -381,7 +380,7 @@ func recordTxFailure(rec *recorder, txID string, meta *connMeta, req *reqHead, u
 	rec.event(evTxStart{T: "txStart", ID: txID, Conn: meta.connID, TS: started, Method: req.method, URL: url,
 		Host: hostOnly(host), Scheme: meta.scheme, Proto: req.proto, ReqHeaders: req.headers.pairs(),
 		Client: meta.client, Server: meta.server, SNI: meta.sni})
-	rec.event(evTxEnd{T: "txEnd", ID: txID, TS: nowMs(), Error: errText})
+	rec.endTxOnce(txID, evTxEnd{T: "txEnd", ID: txID, TS: nowMs(), Error: errText})
 }
 
 func ifFirst(first bool, v float64) float64 {

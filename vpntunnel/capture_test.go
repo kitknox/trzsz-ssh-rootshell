@@ -529,7 +529,8 @@ func TestPlainHTTPWebSocketAndContinue(t *testing.T) {
 }
 
 func TestServerSpeaksFirstIsRelayed(t *testing.T) {
-	dir, _ := testCapture(t, nil)
+	// Only an any-port rule makes a non-web port peekable; those wait briefly.
+	dir, _ := testCapture(t, func(c *captureConfig) { c.MITMHosts = []string{"*:0"} })
 	up, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer up.Close()
 	go func() {
@@ -540,7 +541,7 @@ func TestServerSpeaksFirstIsRelayed(t *testing.T) {
 		_, _ = c.Write([]byte("220 smtp ready\r\n"))
 		c.Close()
 	}()
-	app, done := startFlow(t, 443, up.Addr().String())
+	app, done := startFlow(t, 2525, up.Addr().String())
 	_ = app.SetReadDeadline(time.Now().Add(5 * time.Second))
 	line, err := bufio.NewReader(app).ReadString('\n')
 	if err != nil || line != "220 smtp ready\r\n" {
@@ -630,6 +631,71 @@ func TestRecorderStopDrainsQueuedWrites(t *testing.T) {
 	defer r2.close("stop", "user")
 	if r2.written.Load() < int64(len(b)) {
 		t.Errorf("resumed usage %d ignores existing bodies (%d)", r2.written.Load(), len(b))
+	}
+}
+
+func TestStopFinishesPendingTransactions(t *testing.T) {
+	dir := t.TempDir()
+	r, err := newRecorder(dir, "s", "n", 1<<20, 0, "direct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := r.newBodySink("n-1", "res")
+	_, _ = sink.Write([]byte("partial body"))
+	r.markWebSocket("n-2")
+	done := r.newBodySink("n-3", "res")
+	_, _ = done.Write([]byte("x"))
+	endTx(r, "n-3", nil, done, "", false, "")
+	r.close("stop", "user")
+
+	ends := eventsOf(readEvents(t, dir), "txEnd")
+	byID := map[string]map[string]any{}
+	for _, e := range ends {
+		byID[e["id"].(string)] = e
+	}
+	if len(ends) != 3 {
+		t.Fatalf("txEnd events = %v", ends)
+	}
+	if e := byID["n-1"]; e["resBodyFile"] != "bodies/n-1.res" || e["resTruncated"] != true {
+		t.Errorf("pending body not finalized: %v", e)
+	}
+	if byID["n-2"]["ws"] != true {
+		t.Errorf("pending WebSocket flag lost: %v", byID["n-2"])
+	}
+}
+
+func TestCompletionAndShutdownWriteOneTxEnd(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		dir := t.TempDir()
+		r, err := newRecorder(dir, "s", "n", 1<<20, 0, "direct")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink := r.newBodySink("n-1", "res")
+		_, _ = sink.Write([]byte("body"))
+		done := make(chan struct{})
+		go func() { endTx(r, "n-1", nil, sink, "", false, ""); close(done) }()
+		r.close("stop", "user")
+		<-done
+		if ends := eventsOf(readEvents(t, dir), "txEnd"); len(ends) != 1 {
+			t.Fatalf("iteration %d: %d txEnd events", i, len(ends))
+		}
+	}
+}
+
+func TestRewriteRulesFollowLiveConfig(t *testing.T) {
+	testCapture(t, func(c *captureConfig) {
+		c.RewriteRules = []rewriteRule{{ID: "r", Enabled: true, Match: "*", Phase: "request", Action: "addHeader", Header: "X-A", Value: "1"}}
+	})
+	if len(liveRewrites().matching("request", "https://x.test/")) != 1 {
+		t.Fatal("rule not live")
+	}
+	b, _ := json.Marshal(captureConfig{})
+	if err := CaptureConfigure(string(b)); err != nil {
+		t.Fatal(err)
+	}
+	if liveRewrites() != nil {
+		t.Error("rewrites must stop with capture")
 	}
 }
 

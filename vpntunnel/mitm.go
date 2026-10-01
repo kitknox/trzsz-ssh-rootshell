@@ -36,9 +36,14 @@ import (
 )
 
 const (
-	peekTimeout      = 300 * time.Millisecond
-	handshakeTimeout = 15 * time.Second
-	caEndpointIP     = "10.0.0.1" // tunnel gateway; serves the capture CA over plain HTTP
+	// How long to wait for the client's first bytes before relaying untouched.
+	// Web ports are always client-first, so a slow ClientHello must not lose
+	// decryption; ports reached only via an any-port rule may be server-first.
+	peekTimeoutWeb      = 5 * time.Second
+	peekTimeoutExplicit = 2 * time.Second
+	peekTimeoutAnyPort  = 300 * time.Millisecond
+	handshakeTimeout    = 15 * time.Second
+	caEndpointIP        = "10.0.0.1" // tunnel gateway; serves the capture CA over plain HTTP
 )
 
 var errPassthrough = errors.New("capture: passthrough")
@@ -57,9 +62,11 @@ type flowCtx struct {
 	dial    func(ctx context.Context) (net.Conn, error)
 }
 
+// rec is the recorder in force now, not when the flow opened, so kept-alive
+// connections follow session changes (clearing, a new recording).
 func (fc *flowCtx) rec() *recorder {
-	if fc.cs.recording() {
-		return fc.cs.rec
+	if cs := captureCur.Load(); cs.recording() {
+		return cs.rec
 	}
 	return nil
 }
@@ -103,7 +110,8 @@ func serveCapturedFlow(fc *flowCtx) {
 		return
 	}
 	pc := newPeekConn(fc.client)
-	first, err := pc.peek(1, time.Now().Add(peekTimeout))
+	wait := peekWait(fc.cs, fc.dstPort)
+	first, err := pc.peek(1, time.Now().Add(wait))
 	if len(first) == 0 {
 		if err != nil && isTimeout(err) {
 			relayPeeked(fc, pc, "notHTTP", "", "", nil)
@@ -113,7 +121,7 @@ func serveCapturedFlow(fc *flowCtx) {
 	switch {
 	case first[0] == 0x16:
 		serveTLS(fc, pc)
-	case looksLikeHTTP(pc):
+	case looksLikeHTTP(pc, wait):
 		meta := &connMeta{
 			scheme:      "http",
 			client:      fc.srcAddr,
@@ -134,8 +142,23 @@ func isTimeout(err error) bool {
 
 var httpMethodPrefixes = []string{"GET ", "POST ", "PUT ", "HEAD ", "DELETE ", "OPTIONS ", "PATCH ", "TRACE ", "CONNECT "}
 
-func looksLikeHTTP(pc *peekConn) bool {
-	b, _ := pc.peek(8, time.Now().Add(peekTimeout))
+func peekWait(cs *captureState, port int) time.Duration {
+	switch {
+	case isWebPort(port):
+		return peekTimeoutWeb
+	case cs.hosts != nil && cs.hosts.ports[port]:
+		return peekTimeoutExplicit
+	default:
+		return peekTimeoutAnyPort
+	}
+}
+
+func isWebPort(port int) bool {
+	return port == 80 || port == 443 || port == 8080 || port == 8443
+}
+
+func looksLikeHTTP(pc *peekConn, wait time.Duration) bool {
+	b, _ := pc.peek(8, time.Now().Add(wait))
 	s := string(b)
 	for _, m := range httpMethodPrefixes {
 		if strings.HasPrefix(m, s) || strings.HasPrefix(s, m) {
