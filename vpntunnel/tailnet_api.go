@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"runtime"
 
 	"github.com/trzsz/tsshd/tsshd"
 )
@@ -129,12 +130,17 @@ func StartTailscaleTunnel(configJSON string, store TailscaleStateStore, tsCallba
 	}
 
 	tsshEgress := extra.Tailscale.Egress == "tssh"
-	limit := int64(tailnetHeapLimitBytes)
-	if cfg.SOCKS5Address != "" || tsshEgress {
-		limit = tailnetSSHHeapLimitBytes
+	// Capture restores these when it stops. Only iOS has the ~50 MB limit;
+	// the macOS system extension runs uncapped.
+	if runtime.GOOS == "ios" {
+		limit := int64(tailnetHeapLimitBytes)
+		if cfg.SOCKS5Address != "" || tsshEgress {
+			limit = tailnetSSHHeapLimitBytes
+		}
+		setBaseMemoryLimits(limit, tailnetGCPercent)
+	} else {
+		setBaseMemoryLimits(sshHeapLimitBytes, sshGCPercent)
 	}
-	// Capture restores these when it stops.
-	setBaseMemoryLimits(limit, tailnetGCPercent)
 
 	cfg.MTU = tailnetMTU
 	stats := &tunnelStats{}

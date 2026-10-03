@@ -4,7 +4,7 @@
 #
 # This script builds the vpntunnel Go library (gVisor netstack + tsshd)
 # as an xcframework suitable for iOS, iOS Simulator, Mac Catalyst, and visionOS.
-# Only the iOS and iOS Simulator slices include the Tailscale engine.
+# Only the iOS, iOS Simulator and native macOS slices include the Tailscale engine.
 #
 # Prerequisites:
 #   - Go 1.26.5 (fetched through GOTOOLCHAIN when the host go is older)
@@ -47,8 +47,19 @@ MIN_VISIONOS_VERSION="26.0"
 # Minimum native macOS version (system-extension host + sysext, Standalone build)
 MIN_MACOS_VERSION="15.0"
 
-# Tailscale features kept in the iOS slices; everything else is compiled out.
+# Tailscale features kept in the iOS and macOS slices; everything else is
+# compiled out.
 TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock"
+
+# Build tags for the Tailscale slices. The omit list comes from the pinned
+# tailscale.com module, so it tracks go.sum.
+tailscale_build_tags() {
+    local tags
+    tags="$(cd "$TSSH_BUILD_MODULE_DIR" && GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
+        go run tailscale.com/cmd/featuretags --min --add="$TAILSCALE_FEATURES")" \
+        || error "could not resolve Tailscale feature tags"
+    echo "rootshell_tailscale,$tags"
+}
 
 # Parse arguments
 VERBOSE=false
@@ -171,12 +182,8 @@ build_ios_frameworks() {
         VERBOSE_FLAG="-v"
     fi
 
-    # Tailscale (iOS only), trimmed to the features the tunnel uses. The tag
-    # list comes from the pinned tailscale.com module, so it tracks go.sum.
     local ts_tags
-    ts_tags="$(GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-        go run tailscale.com/cmd/featuretags --min --add="$TAILSCALE_FEATURES")" \
-        || error "could not resolve Tailscale feature tags"
+    ts_tags="$(tailscale_build_tags)"
 
     log "  Building for targets: ios,iossimulator (Tailscale: $TAILSCALE_FEATURES)"
     log "  This may take several minutes..."
@@ -185,7 +192,7 @@ build_ios_frameworks() {
     "$GOMOBILE" bind \
         $VERBOSE_FLAG \
         -target="ios,iossimulator" \
-        -tags="rootshell_tailscale,$ts_tags" \
+        -tags="$ts_tags" \
         -trimpath \
         -ldflags="-s -w -buildid=" \
         -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME.xcframework" \
@@ -351,12 +358,16 @@ build_macos_framework() {
             "$VPNTUNNEL_DIR/go.mod"
     fi
 
+    # The system extension runs Tailscale too.
+    local ts_tags
+    ts_tags="$(tailscale_build_tags)"
+
     cd "$WORK_DIR/src/gobind"
 
     local MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path)
     local MACOS_CC=$(xcrun --sdk macosx --find clang)
 
-    log "  Building arm64-apple-macos${MIN_MACOS_VERSION}..."
+    log "  Building arm64-apple-macos${MIN_MACOS_VERSION} (Tailscale: $TAILSCALE_FEATURES)..."
     CGO_ENABLED=1 \
     GOOS=darwin \
     GOARCH=arm64 \
@@ -364,7 +375,7 @@ build_macos_framework() {
     CGO_CFLAGS="-target arm64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     CGO_LDFLAGS="-target arm64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-arm64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-arm64.a" .
 
     log "  Building x86_64-apple-macos${MIN_MACOS_VERSION}..."
     CGO_ENABLED=1 \
@@ -374,7 +385,7 @@ build_macos_framework() {
     CGO_CFLAGS="-target x86_64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     CGO_LDFLAGS="-target x86_64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-amd64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-amd64.a" .
 
     log "  Creating universal binary..."
     lipo -create \
@@ -796,17 +807,19 @@ verify_framework() {
         fi
     fi
 
-    # Tailscale is linked into the iOS slices only. Go keeps function names
-    # in pclntab even when stripped, so a grep finds the engine.
-    local slice lib marker="tailscale.com/wgengine.NewUserspaceEngine"
+    # Tailscale is linked into the iOS and native macOS slices only. Go keeps
+    # function names in pclntab even when stripped, so a grep finds the engine.
+    local slice lib wants marker="tailscale.com/wgengine.NewUserspaceEngine"
     for slice in ios-arm64 "ios-arm64_x86_64-simulator" "ios-arm64_x86_64-maccatalyst" "macos-arm64_x86_64" xros-arm64; do
         lib=$(find "$FRAMEWORK_PATH/$slice" -type f \( -name "lib$FRAMEWORK_NAME.a" -o -name "$FRAMEWORK_NAME" \) | head -1)
         [[ -n "$lib" ]] || continue
+        wants=false
+        [[ "$slice" == ios-arm64 || "$slice" == *-simulator || "$slice" == macos-* ]] && [[ "$slice" != xros-* ]] && wants=true
         if LC_ALL=C grep -a -q "$marker" "$lib"; then
-            [[ "$slice" == ios-* && "$slice" != *maccatalyst ]] || error "$slice unexpectedly contains Tailscale"
+            $wants || error "$slice unexpectedly contains Tailscale"
             log "  OK $slice includes Tailscale ($(du -h "$lib" | cut -f1))"
         else
-            [[ "$slice" == ios-* && "$slice" != *maccatalyst ]] && error "$slice is missing Tailscale"
+            $wants && error "$slice is missing Tailscale"
             log "  OK $slice without Tailscale ($(du -h "$lib" | cut -f1))"
         fi
     done
