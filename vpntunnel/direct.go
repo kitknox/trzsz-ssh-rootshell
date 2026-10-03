@@ -48,6 +48,7 @@ var directInterface atomic.Int64
 // (0 = unbound). The provider updates it as the network path changes.
 func SetDirectInterface(index int) {
 	directInterface.Store(int64(index))
+	tailnetInterfaceChanged(index)
 }
 
 // directDialer dials upstream from the provider process itself, pinned to the

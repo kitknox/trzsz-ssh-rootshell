@@ -113,7 +113,7 @@ cat > "$PACKAGE_DIR/provenance.json" <<EOF
   "trzszSSHRevision": "$trzsz_revision",
   "tsshdRevision": "$tsshd_revision",
   "kcpGoRevision": "$kcp_revision",
-  "goVersion": "$(go env GOVERSION)",
+  "goVersion": "$(GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" go env GOVERSION)",
   "gomobileVersion": "$TSSH_GOMOBILE_VERSION",
   "gobindVersion": "$TSSH_GOBIND_VERSION",
   "xcodeVersion": "$(xcodebuild -version | tr '\n' ' ')"

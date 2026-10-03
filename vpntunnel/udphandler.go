@@ -27,6 +27,7 @@ package vpntunnel
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -55,7 +56,8 @@ type udpForwarder struct {
 	isDNS      func(addr string) bool
 	tcpDial    tcpDialer // for DNS-over-TCP fallback (SSH mode)
 	blockQUIC  bool
-	maxPayload int // largest inner UDP payload the TUN MTU can carry
+	maxPayload int  // largest inner UDP payload the TUN MTU can carry
+	dnsViaTCP  bool // answer port 53 through tcpDial even when dialer is set
 
 	mu    sync.Mutex
 	conns map[string]*udpConnTracker // key: "srcAddr->dstAddr"
@@ -193,7 +195,7 @@ func (f *udpForwarder) handleUDP(r *udp.ForwarderRequest) {
 			}
 		}()
 
-		if f.dialer == nil {
+		if f.dialer == nil || (f.dnsViaTCP && f.isDNS(dstAddr)) {
 			// SSH mode: only DNS reaches here (allowFlow rejects the rest
 			// with ICMP port-unreachable); answer it via DNS-over-TCP.
 			if f.isDNS(dstAddr) {
@@ -359,15 +361,25 @@ func (f *udpForwarder) handleDNSOverTCP(ctx context.Context, ep tcpip.Endpoint, 
 		return
 	}
 
-	// Connect to DNS server over TCP
-	conn, err := f.tcpDial.DialTCP(ctx, dstAddr)
+	resp, err := dnsExchangeTCP(ctx, f.tcpDial, dstAddr, query)
 	if err != nil {
-		log.Printf("vpntunnel: dns-over-tcp dial %s: %v", dstAddr, err)
+		log.Printf("vpntunnel: dns-over-tcp %s: %v", dstAddr, err)
 		return
+	}
+
+	// Write DNS response back to netstack as UDP
+	observeDNSResponse(resp)
+	ep.Write(bytes.NewReader(resp), tcpip.WriteOptions{})
+}
+
+// dnsExchangeTCP sends one DNS query over TCP (RFC 1035 length-prefixed).
+func dnsExchangeTCP(ctx context.Context, dialer tcpDialer, server string, query []byte) ([]byte, error) {
+	conn, err := dialer.DialTCP(ctx, server)
+	if err != nil {
+		return nil, err
 	}
 	defer conn.Close()
 
-	// DNS over TCP: prepend 2-byte length prefix
 	tcpQuery := make([]byte, 2+len(query))
 	tcpQuery[0] = byte(len(query) >> 8)
 	tcpQuery[1] = byte(len(query) & 0xff)
@@ -375,28 +387,23 @@ func (f *udpForwarder) handleDNSOverTCP(ctx context.Context, ep tcpip.Endpoint, 
 
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Write(tcpQuery); err != nil {
-		return
+		return nil, err
 	}
 
-	// Read TCP DNS response (2-byte length prefix)
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	lenBuf := make([]byte, 2)
 	if _, err := readFull(conn, lenBuf); err != nil {
-		return
+		return nil, err
 	}
 	respLen := int(lenBuf[0])<<8 | int(lenBuf[1])
 	if respLen > udpBufferSize {
-		return
+		return nil, fmt.Errorf("dns response too large: %d", respLen)
 	}
-
 	resp := make([]byte, respLen)
 	if _, err := readFull(conn, resp); err != nil {
-		return
+		return nil, err
 	}
-
-	// Write DNS response back to netstack as UDP
-	observeDNSResponse(resp)
-	ep.Write(bytes.NewReader(resp), tcpip.WriteOptions{})
+	return resp, nil
 }
 
 // cleanup closes idle UDP connections.

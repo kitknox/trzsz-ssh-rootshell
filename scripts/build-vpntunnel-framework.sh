@@ -4,9 +4,10 @@
 #
 # This script builds the vpntunnel Go library (gVisor netstack + tsshd)
 # as an xcframework suitable for iOS, iOS Simulator, Mac Catalyst, and visionOS.
+# Only the iOS and iOS Simulator slices include the Tailscale engine.
 #
 # Prerequisites:
-#   - Go 1.26.3
+#   - Go 1.26.5 (fetched through GOTOOLCHAIN when the host go is older)
 #   - Xcode command line tools
 #
 # Usage:
@@ -45,6 +46,9 @@ MIN_VISIONOS_VERSION="26.0"
 
 # Minimum native macOS version (system-extension host + sysext, Standalone build)
 MIN_MACOS_VERSION="15.0"
+
+# Tailscale features kept in the iOS slices; everything else is compiled out.
+TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock"
 
 # Parse arguments
 VERBOSE=false
@@ -167,13 +171,21 @@ build_ios_frameworks() {
         VERBOSE_FLAG="-v"
     fi
 
-    log "  Building for targets: ios,iossimulator"
+    # Tailscale (iOS only), trimmed to the features the tunnel uses. The tag
+    # list comes from the pinned tailscale.com module, so it tracks go.sum.
+    local ts_tags
+    ts_tags="$(GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
+        go run tailscale.com/cmd/featuretags --min --add="$TAILSCALE_FEATURES")" \
+        || error "could not resolve Tailscale feature tags"
+
+    log "  Building for targets: ios,iossimulator (Tailscale: $TAILSCALE_FEATURES)"
     log "  This may take several minutes..."
 
     GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
     "$GOMOBILE" bind \
         $VERBOSE_FLAG \
         -target="ios,iossimulator" \
+        -tags="rootshell_tailscale,$ts_tags" \
         -trimpath \
         -ldflags="-s -w -buildid=" \
         -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME.xcframework" \
@@ -783,6 +795,21 @@ verify_framework() {
             error "Go bindings are not exported correctly"
         fi
     fi
+
+    # Tailscale is linked into the iOS slices only. Go keeps function names
+    # in pclntab even when stripped, so a grep finds the engine.
+    local slice lib marker="tailscale.com/wgengine.NewUserspaceEngine"
+    for slice in ios-arm64 "ios-arm64_x86_64-simulator" "ios-arm64_x86_64-maccatalyst" "macos-arm64_x86_64" xros-arm64; do
+        lib=$(find "$FRAMEWORK_PATH/$slice" -type f \( -name "lib$FRAMEWORK_NAME.a" -o -name "$FRAMEWORK_NAME" \) | head -1)
+        [[ -n "$lib" ]] || continue
+        if LC_ALL=C grep -a -q "$marker" "$lib"; then
+            [[ "$slice" == ios-* && "$slice" != *maccatalyst ]] || error "$slice unexpectedly contains Tailscale"
+            log "  OK $slice includes Tailscale ($(du -h "$lib" | cut -f1))"
+        else
+            [[ "$slice" == ios-* && "$slice" != *maccatalyst ]] && error "$slice is missing Tailscale"
+            log "  OK $slice without Tailscale ($(du -h "$lib" | cut -f1))"
+        fi
+    done
 
     log "Framework verification complete!"
 }

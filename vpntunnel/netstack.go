@@ -96,6 +96,13 @@ type tunnelStack struct {
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
 func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, stats *tunnelStats, datagramBudget int) (*tunnelStack, error) {
+	return newTunnelStackWithOutput(cfg, tcpDial, udpDial, stats, datagramBudget, nil)
+}
+
+// newTunnelStackWithOutput writes outbound packets to out when it is non-nil;
+// the caller owns and closes it. Tailscale mode shares one queue between this
+// stack and the WireGuard path.
+func newTunnelStackWithOutput(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, stats *tunnelStats, datagramBudget int, out chan packetEntry) (*tunnelStack, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	mtu := cfg.MTU
@@ -193,8 +200,9 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	// black-holing on QUIC). Established endpoints are demuxed before the
 	// handler, so the policy check only runs for new flows.
 	udpFwd := newUDPForwarder(udpDial, tcpDial, stats, cfg.BlockQUIC, mtu, datagramBudget)
-	udpForwarderGvisor := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+	udpForwarderGvisor := udp.NewForwarder(s, func(r *udp.ForwarderRequest) bool {
 		udpFwd.handleUDP(r)
+		return true
 	})
 	s.SetTransportProtocolHandler(udp.ProtocolNumber,
 		func(id stack.TransportEndpointID, pkt *stack.PacketBuffer) bool {
@@ -205,7 +213,10 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 			return udpForwarderGvisor.HandlePacket(id, pkt)
 		})
 
-	packetCh := make(chan packetEntry, packetReaderChSize)
+	packetCh, ownsOut := out, false
+	if packetCh == nil {
+		packetCh, ownsOut = make(chan packetEntry, packetReaderChSize), true
+	}
 
 	ts := &tunnelStack{
 		stack:    s,
@@ -225,7 +236,9 @@ func newTunnelStack(cfg *VPNTunnelConfig, tcpDial tcpDialer, udpDial udpDialer, 
 	ts.wg.Add(1)
 	go func() {
 		defer ts.wg.Done()
-		defer close(packetCh)
+		if ownsOut {
+			defer close(packetCh)
+		}
 		for {
 			pkt := ep.ReadContext(ctx)
 			if pkt == nil {
@@ -329,6 +342,23 @@ func (ts *tunnelStack) close() {
 	ts.stack.Close()
 }
 
+// ipv6Dialer is a dialer that reaches some IPv6 destinations natively.
+type ipv6Dialer interface {
+	dialsIPv6(ip string) bool
+}
+
+// dialsIPv6 reports whether dialer can reach the IPv6 address ip. Direct
+// always can; server transports may lack IPv6, so they're refused.
+func dialsIPv6(dialer tcpDialer, ip string) bool {
+	switch d := dialer.(type) {
+	case *directDialer:
+		return true
+	case ipv6Dialer:
+		return d.dialsIPv6(ip)
+	}
+	return false
+}
+
 // handleTCPForward handles a single TCP connection from the netstack.
 func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDialer, stats *tunnelStats, sem chan struct{}) {
 	// Acquire semaphore slot. Allow a brief admission wait to smooth short
@@ -379,7 +409,7 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	// take seconds, so they refuse it outright; only Direct tries.
 	var preDialed net.Conn
 	if id.LocalAddress.Len() == 16 {
-		if _, direct := dialer.(*directDialer); !direct {
+		if !dialsIPv6(dialer, dstIP) {
 			r.Complete(true)
 			return
 		}

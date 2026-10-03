@@ -106,10 +106,19 @@ type TunnelCallback interface {
 	OnStatsUpdate(bytesIn int64, bytesOut int64, activeConns int)
 }
 
+// packetEngine moves packets between the provider and a transport: the plain
+// netstack (*tunnelStack) or Tailscale's demux (*tailnetPath).
+type packetEngine interface {
+	injectPacket(data []byte, family int)
+	readPacket() ([]byte, int)
+	readPacketNonBlocking() ([]byte, int)
+	close()
+}
+
 // Global tunnel state (only one tunnel active at a time, per NEPacketTunnelProvider).
 var (
 	globalMu     sync.Mutex
-	globalStack  *tunnelStack
+	globalStack  packetEngine
 	globalStats  *tunnelStats
 	globalConfig *VPNTunnelConfig
 	globalCB     TunnelCallback
@@ -279,6 +288,10 @@ func StopTunnel() error {
 	}
 
 	closeCapture("tunnelStopped", false)
+
+	// Swift has stopped draining packets: release blocked writers, then
+	// stop WireGuard before closing the path it writes into.
+	stopTailnetLocked()
 
 	globalStack.close()
 	globalStack = nil

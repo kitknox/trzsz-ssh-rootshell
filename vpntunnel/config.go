@@ -33,8 +33,9 @@ import (
 // VPNTunnelConfig is the JSON-serializable configuration for the VPN tunnel.
 // Shared between the Swift main app and the Go netstack layer.
 type VPNTunnelConfig struct {
-	// TransportType selects the transport: "ssh", "tssh", or "direct" (dial
-	// upstream from the extension itself, no remote server)
+	// TransportType selects the transport: "ssh", "tssh", "direct" (dial
+	// upstream from the extension itself, no remote server), or "tailscale"
+	// (StartTailscaleTunnel; socks5Address adds SSH egress)
 	TransportType string `json:"transportType"`
 
 	// TSSH-specific fields (used when TransportType == "tssh")
@@ -98,7 +99,9 @@ func ParseConfig(configJSON string) (*VPNTunnelConfig, error) {
 	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return nil, fmt.Errorf("vpntunnel: parse config: %w", err)
 	}
-	if cfg.TransportType != "ssh" && cfg.TransportType != "tssh" && cfg.TransportType != "direct" {
+	switch cfg.TransportType {
+	case "ssh", "tssh", "direct", "tailscale":
+	default:
 		return nil, fmt.Errorf("vpntunnel: invalid transport type: %q", cfg.TransportType)
 	}
 	// MTU <= 0 means "auto-resolve from transport" for TSSH.

@@ -3,7 +3,7 @@
 # Shared, reproducible toolchain and dependency handling for the Go Mobile
 # frameworks used by the tssh and VPN integrations.
 
-TSSH_GO_TOOLCHAIN_VERSION="${TSSH_GO_TOOLCHAIN_VERSION:-go1.26.3}"
+TSSH_GO_TOOLCHAIN_VERSION="${TSSH_GO_TOOLCHAIN_VERSION:-go1.26.5}"
 TSSH_GOMOBILE_VERSION="${TSSH_GOMOBILE_VERSION:-v0.0.0-20260204172633-1dceadbbeea3}"
 TSSH_GOBIND_VERSION="${TSSH_GOBIND_VERSION:-v0.0.0-20260211191516-dcd2a3258864}"
 # Generated modules intentionally follow the source module's gomobile revision.
@@ -45,8 +45,9 @@ tssh_setup_toolchain() {
     command -v go >/dev/null 2>&1 || tssh_error "Go is not installed"
     command -v xcrun >/dev/null 2>&1 || tssh_error "Xcode command-line tools are not installed"
 
+    # GOTOOLCHAIN lets an older host go fetch the pinned, checksummed release.
     local actual_go
-    actual_go="$(go env GOVERSION)"
+    actual_go="$(GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" go env GOVERSION)"
     if [[ "$actual_go" != "$TSSH_GO_TOOLCHAIN_VERSION" ]]; then
         tssh_error "expected $TSSH_GO_TOOLCHAIN_VERSION; found $actual_go (override TSSH_GO_TOOLCHAIN_VERSION only for an intentional toolchain update)"
     fi

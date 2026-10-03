@@ -84,8 +84,8 @@ type captureEnv struct {
 	transport string
 	flows     *flowRegistry
 	dns       *dnsCache
-	udp       *udpForwarder
-	blocking  atomic.Bool // QUIC + HTTPS-RR blocking while recording
+	udp       atomic.Pointer[udpForwarder] // set late in Tailscale mode
+	blocking  atomic.Bool                  // QUIC + HTTPS-RR blocking while recording
 
 	bypass   sync.Map // host → struct{}: clients that rejected our cert
 	emptyMu  sync.Mutex
@@ -111,9 +111,25 @@ func resetCaptureTunnelState(transport string, ts *tunnelStack) {
 		empty:     make(map[string][]time.Time),
 	}
 	if ts != nil {
-		env.udp = ts.udpFwd
+		env.udp.Store(ts.udpFwd)
 	}
 	captureEnvPtr.Store(env)
+}
+
+// captureRoutingHook lets Tailscale mode reroute when recording starts or
+// stops, or the CA changes. Called with captureMu held; must not block.
+var captureRoutingHook atomic.Pointer[func()]
+
+func notifyCaptureRouting() {
+	if f := captureRoutingHook.Load(); f != nil {
+		(*f)()
+	}
+}
+
+// captureServesCA reports whether 10.0.0.1 serves the capture CA.
+func captureServesCA() bool {
+	cs := captureCur.Load()
+	return cs != nil && (cs.caProfile != nil || cs.minter != nil)
 }
 
 func applyCaptureConfig(raw []byte) error {
@@ -173,6 +189,7 @@ func applyCaptureConfig(raw []byte) error {
 				captureCur.Store(next)
 				applyCaptureMemoryLimits(env.transport, false)
 				env.blocking.Store(false)
+				notifyCaptureRouting()
 				return err
 			}
 			next.rec = rec
@@ -191,6 +208,7 @@ func applyCaptureConfig(raw []byte) error {
 	captureCur.Store(next)
 	env.blocking.Store(next.cfg.Enabled)
 	applyCaptureMemoryLimits(env.transport, next.cfg.Enabled)
+	notifyCaptureRouting()
 	return nil
 }
 
@@ -226,6 +244,7 @@ func closeCapture(reason string, final bool) {
 	if !final {
 		captureEnvPtr.Store(nil)
 	}
+	notifyCaptureRouting()
 }
 
 // liveRewrites returns the rewrite rules in force right now (none once capture
@@ -296,6 +315,11 @@ func applyBaseMemoryLimits(transport string) {
 	if transport == "tssh" || transport == "direct" {
 		limit, gc = tsshHeapLimitBytes, tsshGCPercent
 	}
+	setBaseMemoryLimits(limit, gc)
+}
+
+// setBaseMemoryLimits applies limits that capture restores when it stops.
+func setBaseMemoryLimits(limit int64, gc int) {
 	baseMemory.Lock()
 	baseMemory.limit, baseMemory.gc = limit, gc
 	baseMemory.Unlock()
@@ -330,7 +354,7 @@ func mitmFlowCap(transport string) int {
 	if runtime.GOOS != "ios" {
 		return 256
 	}
-	if transport == "ssh" {
+	if transport == "ssh" || transport == "tailscale" {
 		return 24
 	}
 	return 32
@@ -403,8 +427,8 @@ func CaptureResetFlows() int {
 	if env == nil {
 		return 0
 	}
-	if env.udp != nil {
-		env.udp.closePort(443)
+	if udp := env.udp.Load(); udp != nil {
+		udp.closePort(443)
 	}
 	return env.flows.abortAll()
 }
