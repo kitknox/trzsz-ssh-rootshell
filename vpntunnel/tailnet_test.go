@@ -13,6 +13,14 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 func testRouting() routingConfigJSON {
@@ -198,7 +206,12 @@ func testPath(t *testing.T, routing routingConfigJSON, socks bool) (*tailnetPath
 	if socks {
 		cfg.SOCKS5Address = "127.0.0.1:1"
 	}
-	p := newTailnetPath(cfg, routing, &tunnelStats{})
+	return testPathWith(t, cfg, routing, false)
+}
+
+func testPathWith(t *testing.T, cfg *VPNTunnelConfig, routing routingConfigJSON, tsshEgress bool) (*tailnetPath, *fakeBackend) {
+	t.Helper()
+	p := newTailnetPath(cfg, routing, tsshEgress, &tunnelStats{})
 	fb := &fakeBackend{}
 	p.setBackend(fb)
 	p.setState(&tailnetNetState{
@@ -345,26 +358,6 @@ func TestTailnetGlobalDNSInFullTunnel(t *testing.T) {
 	}
 }
 
-// answeringBackend plays Tailscale's resolver: every query to 100.100.100.100
-// gets one A record back through the path's outbound stream.
-type answeringBackend struct {
-	p      *tailnetPath
-	answer netip.Addr
-}
-
-func (b *answeringBackend) deliver(pkt []byte) {
-	info, ok := parseIPPacket(pkt)
-	if !ok || info.dst != quad100 {
-		return
-	}
-	q, ok := parseDNSQuery(info.udpPayload())
-	if !ok {
-		return
-	}
-	resp := dnsAnswer(q, dnsmessage.RCodeSuccess, &b.answer, 60)
-	go b.p.emit(buildUDPPacket(netip.AddrPortFrom(quad100, 53), netip.AddrPortFrom(info.src, info.srcPort), resp))
-}
-
 func tcpDNS(t *testing.T, conn net.Conn, query []byte) dnsmessage.Message {
 	t.Helper()
 	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
@@ -388,9 +381,14 @@ func tcpDNS(t *testing.T, conn net.Conn, query []byte) dnsmessage.Message {
 }
 
 func TestTailnetDNSOverTCPFollowsRules(t *testing.T) {
-	p, _ := testPath(t, testRouting(), true)
+	p, fb := testPath(t, testRouting(), true)
 	peer := netip.MustParseAddr("100.90.1.2")
-	p.setBackend(&answeringBackend{p: p, answer: peer})
+	var asked []string
+	p.tailscaleQuery = func(_ context.Context, query []byte) ([]byte, error) {
+		q, _ := parseDNSQuery(query)
+		asked = append(asked, q.name)
+		return dnsAnswer(q, dnsmessage.RCodeSuccess, &peer, 60), nil
+	}
 
 	conn, err := (&routedDialer{p: p}).DialTCP(context.Background(), "100.100.100.100:53")
 	if err != nil {
@@ -405,18 +403,53 @@ func TestTailnetDNSOverTCPFollowsRules(t *testing.T) {
 		t.Fatalf("TCP SSH-rule answer %s -> %q", a, h)
 	}
 
-	// Tailnet name: Tailscale's resolver, and its reply never reaches the provider.
+	// Tailnet name: Tailscale's resolver in-process, with no packets sent.
 	m = tcpDNS(t, conn, dnsQuery(t, "laptop.tail1234.ts.net.", dnsmessage.TypeA))
 	if got := netip.AddrFrom4(m.Answers[0].Body.(*dnsmessage.AResource).A); got != peer {
 		t.Fatalf("TCP tailnet answer %s", got)
 	}
-	select {
-	case e := <-p.out:
-		t.Fatalf("probe reply leaked to the provider: %x", e.data)
-	default:
+	if !slices.Equal(asked, []string{"laptop.tail1234.ts.net"}) || fb.count() != 0 {
+		t.Fatalf("Tailscale asked %v, packets %d", asked, fb.count())
 	}
-	if len(p.probes) != 0 {
-		t.Fatalf("probe not released: %v", p.probes)
+}
+
+func TestDNSExchangeKeepsTCP(t *testing.T) {
+	// A TCP-only DNS server: the TCP path must not fall back to UDP.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		var hdr [2]byte
+		if _, err := io.ReadFull(c, hdr[:]); err != nil {
+			return
+		}
+		query := make([]byte, binary.BigEndian.Uint16(hdr[:]))
+		if _, err := io.ReadFull(c, query); err != nil {
+			return
+		}
+		q, _ := parseDNSQuery(query)
+		a := netip.MustParseAddr("192.0.2.7")
+		resp := dnsAnswer(q, dnsmessage.RCodeSuccess, &a, 60)
+		_, _ = c.Write(append([]byte{byte(len(resp) >> 8), byte(len(resp))}, resp...))
+	}()
+
+	p, _ := testPath(t, routingConfigJSON{}, false)
+	p.upstream = []string{ln.Addr().String()}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resp, err := p.exchangeDNS(ctx, dnsQuery(t, "big.example.org.", dnsmessage.TypeA), false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addrs := dnsAnswerAddrs(resp); len(addrs) != 1 || addrs[0] != netip.MustParseAddr("192.0.2.7") {
+		t.Fatalf("answer %v", addrs)
 	}
 }
 
@@ -446,7 +479,6 @@ func TestTailnetTCPDNSUsesStackOnlyWithEgress(t *testing.T) {
 
 func TestTailnetCaptureRouting(t *testing.T) {
 	p, _ := testPath(t, routingConfigJSON{}, false) // Tailscale only
-	p.tailnetDial = func(context.Context, netip.AddrPort) (net.Conn, error) { return nil, errors.New("unused") }
 	changes := 0
 	p.onCaptureChange = func(bool) { changes++ }
 	hook := p.refreshCapture
@@ -501,6 +533,250 @@ func TestTailnetCaptureRouting(t *testing.T) {
 	}
 }
 
+// peerBackend stands in for WireGuard and a tailnet host: a second gVisor
+// stack whose packets come back through the path's outbound stream.
+type peerBackend struct {
+	ep *channel.Endpoint
+}
+
+func (b *peerBackend) deliver(pkt []byte) {
+	buf := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(pkt)})
+	b.ep.InjectInbound(ipv4.ProtocolNumber, buf)
+	buf.DecRef()
+}
+
+func newTailnetPeer(t *testing.T, p *tailnetPath, addr netip.Addr) *stack.Stack {
+	t.Helper()
+	s := stack.New(stack.Options{
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+	})
+	ep := channel.New(256, tailnetMTU, "")
+	if err := s.CreateNIC(1, ep); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddProtocolAddress(1, tcpip.ProtocolAddress{
+		Protocol: ipv4.ProtocolNumber, AddressWithPrefix: tcpip.AddrFromSlice(addr.AsSlice()).WithPrefix(),
+	}, stack.AddressProperties{}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			pkt := ep.ReadContext(ctx)
+			if pkt == nil {
+				return
+			}
+			data := append([]byte(nil), pkt.ToView().AsSlice()...)
+			pkt.DecRef()
+			p.emit(data)
+		}
+	}()
+	p.setBackend(&peerBackend{ep: ep})
+	t.Cleanup(func() {
+		cancel()
+		s.Close()
+	})
+	return s
+}
+
+func TestDialTailnetOverLink(t *testing.T) {
+	p, _ := testPath(t, routingConfigJSON{}, false)
+	peerAddr := netip.MustParseAddr("100.90.1.2")
+	peer := newTailnetPeer(t, p, peerAddr)
+	ln, err := gonet.ListenTCP(peer, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(peerAddr.AsSlice()), Port: 80}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(c, buf); err == nil {
+			_, _ = c.Write(append([]byte("echo:"), buf...))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := p.dialTailnet(ctx, netip.AddrPortFrom(peerAddr, 80))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.linkConns.Load() != 1 {
+		t.Fatalf("link connections = %d", p.linkConns.Load())
+	}
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 9)
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "echo:ping" {
+		t.Fatalf("read %q, %v", got, err)
+	}
+	c.Close()
+	if p.linkConns.Load() != 0 {
+		t.Fatalf("link connections after close = %d", p.linkConns.Load())
+	}
+	// The peer's replies were claimed by the link, never sent to the apps.
+	select {
+	case e := <-p.out:
+		t.Fatalf("link reply leaked to the provider: %x", e.data)
+	default:
+	}
+}
+
+func TestCapturedTailnetFlowEndToEnd(t *testing.T) {
+	p, _ := testPath(t, routingConfigJSON{}, false)
+	peerAddr := netip.MustParseAddr("100.90.1.2")
+	peer := newTailnetPeer(t, p, peerAddr)
+	ln, err := gonet.ListenTCP(peer, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(peerAddr.AsSlice()), Port: 80}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(c, buf); err == nil {
+			_, _ = c.Write(append([]byte("echo:"), buf...))
+		}
+	}()
+
+	// An app on the device: its packets enter the tunnel, and the tunnel's
+	// output comes back to it.
+	app := stack.New(stack.Options{
+		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol},
+		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
+	})
+	defer app.Close()
+	appEP := channel.New(256, tailnetMTU, "")
+	if err := app.CreateNIC(1, appEP); err != nil {
+		t.Fatal(err)
+	}
+	node := netip.MustParseAddr("100.101.102.103")
+	_ = app.AddProtocolAddress(1, tcpip.ProtocolAddress{
+		Protocol: ipv4.ProtocolNumber, AddressWithPrefix: tcpip.AddrFromSlice(node.AsSlice()).WithPrefix(),
+	}, stack.AddressProperties{})
+	app.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		for {
+			pkt := appEP.ReadContext(ctx)
+			if pkt == nil {
+				return
+			}
+			data := append([]byte(nil), pkt.ToView().AsSlice()...)
+			pkt.DecRef()
+			p.injectPacket(data, 2)
+		}
+	}()
+	go func() {
+		for {
+			data, _ := p.readPacket()
+			if data == nil {
+				return
+			}
+			buf := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(data)})
+			appEP.InjectInbound(ipv4.ProtocolNumber, buf)
+			buf.DecRef()
+		}
+	}()
+
+	p.capturing.Store(true) // routing as while recording
+	c, err := gonet.DialContextTCP(ctx, app, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFromSlice(peerAddr.AsSlice()), Port: 80}, ipv4.ProtocolNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 9)
+	if _, err := io.ReadFull(c, got); err != nil || string(got) != "echo:ping" {
+		t.Fatalf("app read %q, %v", got, err)
+	}
+	if !p.statsSnapshot().Netstack {
+		t.Fatal("captured flow did not go through the netstack")
+	}
+}
+
+// recordingEgress stands in for a tsshd connection.
+type recordingEgress struct {
+	mu   sync.Mutex
+	tcp  []string
+	udp  []string
+	done bool
+}
+
+func (r *recordingEgress) DialTCP(_ context.Context, addr string) (net.Conn, error) {
+	r.mu.Lock()
+	r.tcp = append(r.tcp, addr)
+	r.mu.Unlock()
+	c, _ := net.Pipe()
+	return c, nil
+}
+
+func (r *recordingEgress) DialUDP(_ context.Context, addr string) (udpConn, error) {
+	r.mu.Lock()
+	r.udp = append(r.udp, addr)
+	r.mu.Unlock()
+	return nil, errors.New("recorded")
+}
+
+func TestTailnetTSSHEgress(t *testing.T) {
+	p, _ := testPathWith(t, &VPNTunnelConfig{TransportType: "tailscale"}, testRouting(), true)
+	d := &routedDialer{p: p}
+
+	// Before tsshd attaches: SSH rules already apply, dials fail fast.
+	if p.table.matchHost("wiki.corp.example.com") != routeSSH {
+		t.Fatal("SSH rules inert before the TSSH egress attaches")
+	}
+	if _, err := d.DialTCP(context.Background(), "10.20.9.9:22"); !errors.Is(err, errEgressNotReady) {
+		t.Fatalf("pre-attach dial: %v", err)
+	}
+	ts := p.ensureStack()
+	if !ts.udpFwd.blockQUIC.Load() {
+		t.Fatal("QUIC allowed before the egress can carry it")
+	}
+
+	// Attached: TCP and UDP both go over it, and QUIC opens up.
+	eg := &recordingEgress{}
+	p.setEgress(&egressDialers{tcp: eg, udp: eg, close: func() { eg.done = true }}, true)
+	if ts.udpFwd.blockQUIC.Load() {
+		t.Fatal("QUIC still blocked with a QUIC-capable egress")
+	}
+	fake := p.fake.assign("wiki.corp.example.com")
+	if c, err := d.DialTCP(context.Background(), netip.AddrPortFrom(fake, 443).String()); err != nil {
+		t.Fatal(err)
+	} else {
+		c.Close()
+	}
+	_, _ = d.DialUDP(context.Background(), netip.AddrPortFrom(fake, 443).String())
+	_, _ = d.DialUDP(context.Background(), "10.20.9.9:53")
+	if !slices.Equal(eg.tcp, []string{"wiki.corp.example.com:443"}) ||
+		!slices.Equal(eg.udp, []string{"wiki.corp.example.com:443", "10.20.9.9:53"}) {
+		t.Fatalf("egress saw tcp=%v udp=%v", eg.tcp, eg.udp)
+	}
+
+	// Replacing it closes the old one; so does closing the path.
+	p.setEgress(&egressDialers{tcp: egressDown{}}, false)
+	if !eg.done || !ts.udpFwd.blockQUIC.Load() {
+		t.Fatal("old egress not closed or QUIC not re-blocked")
+	}
+}
+
 func TestTailnetCancelReleasesBlockedWriter(t *testing.T) {
 	p, _ := testPath(t, routingConfigJSON{}, false)
 	for range tailnetOutQueue {
@@ -527,7 +803,7 @@ func TestTailnetCancelReleasesBlockedWriter(t *testing.T) {
 func TestTailnetNetworkSettings(t *testing.T) {
 	// Before login: placeholder address, no routes or DNS.
 	cfg := &VPNTunnelConfig{TransportType: "tailscale", SOCKS5Address: "127.0.0.1:1"}
-	pre := newTailnetPath(cfg, testRouting(), &tunnelStats{})
+	pre := newTailnetPath(cfg, testRouting(), false, &tunnelStats{})
 	defer pre.close()
 	s := pre.networkSettings()
 	if !slices.Equal(s.IPv4Addresses, []string{placeholderTunnelAddr}) || len(s.IPv4Routes) != 0 || len(s.DNSServers) != 0 {

@@ -118,9 +118,13 @@ type tailnetPath struct {
 	table     *routeTable
 	fake      *fakeIPPool
 	directIPs *recentIPs
-	socks     *socks5Dialer // nil without an SSH egress host
 	direct    *directDialer
-	upstream  []string // host:53 servers for names Tailscale doesn't own
+	// SSH egress: Citadel's SOCKS proxy, or a tsshd connection attached
+	// once Swift has spawned it. egressOn: one is configured at all.
+	egressOn   bool
+	egress     atomic.Pointer[egressDialers]
+	egressQUIC atomic.Bool // the egress carries QUIC-sized datagrams
+	upstream   []string    // host:53 servers for names Tailscale doesn't own
 
 	out     chan packetEntry
 	backend atomic.Pointer[backendBox]
@@ -129,10 +133,8 @@ type tailnetPath struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	// Our own queries to Tailscale's resolver, keyed by source port.
-	probeMu   sync.Mutex
-	probes    map[uint16]dnsProbe
-	probeNext uint16
+	// Tailscale's resolver, for TCP queries we terminate; set by the engine.
+	tailscaleQuery func(ctx context.Context, query []byte) ([]byte, error)
 
 	// HTTP capture. Both flags stay false while it's off, so the packet
 	// path pays one atomic load; capturing routes everything through the
@@ -141,7 +143,10 @@ type tailnetPath struct {
 	servesCA  atomic.Bool
 	// Set by the engine before packets flow.
 	onCaptureChange func(capturing bool)
-	tailnetDial     func(ctx context.Context, dst netip.AddrPort) (net.Conn, error)
+	// Capture's re-dials to tailnet hosts (dialTailnet). Tailscale's output
+	// is checked for their replies only while any are open.
+	linkConns atomic.Int32
+	linkStack atomic.Pointer[tunnelStack]
 
 	stackMu   sync.Mutex
 	stack     *tunnelStack
@@ -152,7 +157,50 @@ type tailnetPath struct {
 	dnsFailed atomic.Int64
 }
 
-func newTailnetPath(cfg *VPNTunnelConfig, routing routingConfigJSON, stats *tunnelStats) *tailnetPath {
+// egressDialers is the live SSH egress; udp is nil for SOCKS (TCP only).
+type egressDialers struct {
+	tcp   tcpDialer
+	udp   udpDialer
+	close func()
+}
+
+var errEgressNotReady = errors.New("vpntunnel: SSH egress is not connected yet")
+
+type egressDown struct{}
+
+func (egressDown) DialTCP(context.Context, string) (net.Conn, error) { return nil, errEgressNotReady }
+
+func (p *tailnetPath) egressTCP() tcpDialer {
+	if e := p.egress.Load(); e != nil {
+		return e.tcp
+	}
+	return egressDown{}
+}
+
+func (p *tailnetPath) egressUDP() udpDialer {
+	if e := p.egress.Load(); e != nil {
+		return e.udp
+	}
+	return nil
+}
+
+// setEgress swaps in a new egress, closing the old one. quic says whether
+// its datagrams fit QUIC; otherwise UDP 443 is refused so browsers use TCP.
+func (p *tailnetPath) setEgress(e *egressDialers, quic bool) {
+	p.egressQUIC.Store(quic)
+	p.stackMu.Lock()
+	if p.stack != nil {
+		p.stack.udpFwd.blockQUIC.Store(!quic)
+	}
+	p.stackMu.Unlock()
+	if old := p.egress.Swap(e); old != nil && old.close != nil {
+		old.close()
+	}
+}
+
+// newTailnetPath builds the demux. tsshEgress: a TSSH egress attaches later
+// (TailscaleAttachTSSH); socks5Address in cfg selects SSH egress instead.
+func newTailnetPath(cfg *VPNTunnelConfig, routing routingConfigJSON, tsshEgress bool, stats *tunnelStats) *tailnetPath {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &tailnetPath{
 		cfg:       cfg,
@@ -162,14 +210,14 @@ func newTailnetPath(cfg *VPNTunnelConfig, routing routingConfigJSON, stats *tunn
 		direct:    &directDialer{boundIf: cfg.DirectBoundInterface},
 		out:       make(chan packetEntry, tailnetOutQueue),
 		dnsSem:    make(chan struct{}, tailnetDNSInFlight),
-		probes:    make(map[uint16]dnsProbe),
 		ctx:       ctx,
 		cancel:    cancel,
 	}
+	p.egressOn = cfg.SOCKS5Address != "" || tsshEgress
 	if cfg.SOCKS5Address != "" {
-		p.socks = &socks5Dialer{proxyAddr: cfg.SOCKS5Address}
+		p.egress.Store(&egressDialers{tcp: &socks5Dialer{proxyAddr: cfg.SOCKS5Address}})
 	}
-	p.table = compileRouteTable(routing, p.socks != nil)
+	p.table = compileRouteTable(routing, p.egressOn)
 	for _, s := range cfg.DNSServers {
 		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
 			p.upstream = append(p.upstream, netip.AddrPortFrom(a, 53).String())
@@ -202,8 +250,10 @@ func (p *tailnetPath) toTailscale(pkt []byte) {
 
 // emit queues an outbound packet for the provider; drops it once closed.
 func (p *tailnetPath) emit(pkt []byte) {
-	if p.claimProbeReply(pkt) {
-		return
+	if p.linkConns.Load() > 0 {
+		if ts := p.linkStack.Load(); ts != nil && ts.claimLinkPacket(pkt) {
+			return
+		}
 	}
 	if p.capturing.Load() {
 		observeQuad100Reply(pkt)
@@ -232,7 +282,7 @@ func (p *tailnetPath) injectPacket(data []byte, family int) {
 	}
 	// TCP DNS gets the same rules: our stack terminates it (routedDialer).
 	// Without SSH egress no rule changes an answer, so Tailscale keeps it.
-	if p.socks != nil && info.proto == ipProtoTCP && info.dstPort == 53 && info.dst == quad100 {
+	if p.egressOn && info.proto == ipProtoTCP && info.dstPort == 53 && info.dst == quad100 {
 		if ts := p.ensureStack(); ts != nil {
 			ts.injectPacket(data, family)
 		}
@@ -257,7 +307,7 @@ func (p *tailnetPath) injectPacket(data []byte, family int) {
 // routes; everything else on a tailnet route stays raw.
 func (p *tailnetPath) toStack(dst netip.Addr, st *tailnetNetState) bool {
 	dst = dst.Unmap()
-	if p.socks != nil && fakeIPPrefix.Contains(dst) {
+	if p.egressOn && fakeIPPrefix.Contains(dst) {
 		return true
 	}
 	switch p.table.matchIP(dst) {
@@ -290,13 +340,66 @@ func (p *tailnetPath) captureToStack(info ipPacketInfo, st *tailnetNetState) boo
 	return true
 }
 
+// dialTailnet connects to a tailnet host from this node's address over the
+// netstack's WireGuard-facing link (tailnetlink.go).
+func (p *tailnetPath) dialTailnet(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
+	st := p.state.Load()
+	if st == nil {
+		return nil, fmt.Errorf("no tailnet address for %v", dst)
+	}
+	var src netip.Addr
+	var addrs []netip.Addr
+	for _, a := range st.addrs {
+		addrs = append(addrs, a.Addr())
+		if !src.IsValid() && a.Addr().Is4() == dst.Addr().Is4() {
+			src = a.Addr()
+		}
+	}
+	if !src.IsValid() {
+		return nil, fmt.Errorf("no tailnet address for %v", dst)
+	}
+	ts := p.ensureStack()
+	if ts == nil {
+		return nil, errors.New("vpntunnel: netstack unavailable")
+	}
+	if _, err := ts.tailnetLink(addrs, func(pkt []byte) {
+		p.stats.addBytesOut(len(pkt))
+		if box := p.backend.Load(); box != nil {
+			box.b.deliver(pkt)
+		}
+	}); err != nil {
+		return nil, err
+	}
+	// Counted before dialing: the handshake's replies must be claimed too.
+	p.linkStack.Store(ts)
+	p.linkConns.Add(1)
+	conn, err := ts.dialOverLink(ctx, src, dst)
+	if err != nil {
+		p.linkConns.Add(-1)
+		return nil, err
+	}
+	return &linkConn{Conn: conn, done: func() { p.linkConns.Add(-1) }}, nil
+}
+
 // refreshCapture follows capture state changes (captureRoutingHook).
 func (p *tailnetPath) refreshCapture() {
 	capturing := captureBlocking()
 	p.servesCA.Store(captureServesCA())
-	if was := p.capturing.Swap(capturing); was && !capturing && p.socks == nil {
-		// Tailscale only: nothing else uses the netstack.
-		p.retireStack()
+	if was := p.capturing.Load(); was && !capturing {
+		// Before their packets switch path, reset the flows that only
+		// capture brought here (tailnet proxies, direct traffic), so apps
+		// reconnect at once instead of stalling.
+		if env := currentCaptureEnv(); env != nil {
+			st := p.state.Load()
+			env.flows.abortMatching(func(dst netip.Addr) bool { return !p.toStack(dst, st) })
+		}
+		p.capturing.Store(false)
+		if !p.egressOn {
+			// Tailscale only: nothing else uses the netstack.
+			p.retireStack()
+		}
+	} else {
+		p.capturing.Store(capturing)
 	}
 	if p.onCaptureChange != nil {
 		p.onCaptureChange(capturing)
@@ -313,6 +416,7 @@ func (p *tailnetPath) retireStack() {
 	if ts == nil {
 		return
 	}
+	p.linkStack.CompareAndSwap(ts, nil)
 	if env := currentCaptureEnv(); env != nil {
 		env.udp.CompareAndSwap(ts.udpFwd, nil)
 	}
@@ -344,8 +448,9 @@ func (p *tailnetPath) ensureStack() *tunnelStack {
 	}
 	stackCfg := *p.cfg
 	stackCfg.MTU = tailnetMTU
-	// SSH carries TCP only; refuse QUIC so browsers fall back at once.
-	stackCfg.BlockQUIC = p.socks != nil
+	// SSH carries TCP only (and TSSH may carry too-small datagrams); refuse
+	// QUIC then so browsers fall back at once.
+	stackCfg.BlockQUIC = p.egressOn && !p.egressQUIC.Load()
 	d := &routedDialer{p: p}
 	ts, err := newTunnelStackWithOutput(&stackCfg, d, d, p.stats, 0, p.out)
 	if err != nil {
@@ -388,6 +493,10 @@ func (p *tailnetPath) close() {
 	p.stackMu.Unlock()
 	if ts != nil {
 		ts.close()
+	}
+	// Tells tsshd the session is over (SOCKS has nothing to close here).
+	if e := p.egress.Swap(nil); e != nil && e.close != nil {
+		e.close()
 	}
 }
 
@@ -485,7 +594,8 @@ func (p *tailnetPath) resolveDNS(ctx context.Context, query []byte) []byte {
 		resp, err = p.exchangeTailscale(ctx, query)
 	default:
 		p.dnsFwd.Add(1)
-		resp, err = p.exchangeDNS(ctx, query, route == dnsViaSSH)
+		// The client asked over TCP, usually after a truncated UDP answer.
+		resp, err = p.exchangeDNS(ctx, query, route == dnsViaSSH, true)
 		if err == nil && remember {
 			for _, a := range dnsAnswerAddrs(resp) {
 				p.directIPs.add(a)
@@ -502,90 +612,13 @@ func (p *tailnetPath) resolveDNS(ctx context.Context, query []byte) []byte {
 	return resp
 }
 
-// Our own queries to 100.100.100.100 leave from these ports, below iOS's
-// ephemeral range so client queries never collide with them.
-const (
-	probePortBase  = 40000
-	probePortCount = 1000
-)
-
-type dnsProbe struct {
-	id    uint16
-	reply chan []byte
-}
-
-// exchangeTailscale asks Tailscale's resolver over UDP from the node's
-// address; claimProbeReply hands the answer back.
+// exchangeTailscale asks Tailscale's resolver in-process, as a TCP query:
+// no packets, so no truncation or fragmentation.
 func (p *tailnetPath) exchangeTailscale(ctx context.Context, query []byte) ([]byte, error) {
-	var src netip.Addr
-	if st := p.state.Load(); st != nil {
-		for _, a := range st.addrs {
-			if a.Addr().Is4() {
-				src = a.Addr()
-				break
-			}
-		}
+	if p.tailscaleQuery == nil {
+		return nil, errors.New("vpntunnel: Tailscale resolver unavailable")
 	}
-	if !src.IsValid() || len(query) < 2 {
-		return nil, errors.New("vpntunnel: no tailnet address for DNS")
-	}
-	probe := dnsProbe{id: binary.BigEndian.Uint16(query), reply: make(chan []byte, 1)}
-	p.probeMu.Lock()
-	var port uint16
-	for range probePortCount {
-		candidate := probePortBase + p.probeNext%probePortCount
-		p.probeNext++
-		if _, busy := p.probes[candidate]; !busy {
-			port = candidate
-			break
-		}
-	}
-	if port != 0 {
-		p.probes[port] = probe
-	}
-	p.probeMu.Unlock()
-	if port == 0 {
-		return nil, errors.New("vpntunnel: too many DNS queries in flight")
-	}
-	defer func() {
-		p.probeMu.Lock()
-		delete(p.probes, port)
-		p.probeMu.Unlock()
-	}()
-
-	p.toTailscale(buildUDPPacket(netip.AddrPortFrom(src, port), netip.AddrPortFrom(quad100, 53), query))
-	select {
-	case resp := <-probe.reply:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-// claimProbeReply takes Tailscale's answer to one of our own queries out of
-// the outbound stream.
-func (p *tailnetPath) claimProbeReply(pkt []byte) bool {
-	if len(pkt) < 30 || pkt[0]>>4 != 4 || pkt[9] != ipProtoUDP || [4]byte(pkt[12:16]) != quad100.As4() {
-		return false
-	}
-	info, ok := parseIPPacket(pkt)
-	payload := info.udpPayload()
-	if !ok || info.srcPort != 53 || len(payload) < 2 {
-		return false
-	}
-	p.probeMu.Lock()
-	probe, found := p.probes[info.dstPort]
-	if found && probe.id == binary.BigEndian.Uint16(payload) {
-		delete(p.probes, info.dstPort)
-	} else {
-		found = false
-	}
-	p.probeMu.Unlock()
-	if !found {
-		return false
-	}
-	probe.reply <- append([]byte(nil), payload...)
-	return true
+	return p.tailscaleQuery(ctx, query)
 }
 
 // serveDNSOverTCP is the far end of a client's TCP connection to
@@ -637,7 +670,7 @@ func (p *tailnetPath) forwardDNS(q dnsQuestion, info ipPacketInfo, reply func([]
 		defer func() { <-p.dnsSem }()
 		ctx, cancel := context.WithTimeout(p.ctx, dnsUpstreamTimeout)
 		defer cancel()
-		resp, err := p.exchangeDNS(ctx, query, viaSSH)
+		resp, err := p.exchangeDNS(ctx, query, viaSSH, false)
 		if err != nil {
 			p.dnsFailed.Add(1)
 			reply(dnsAnswer(q, dnsmessage.RCodeServerFailure, nil, 0))
@@ -652,14 +685,19 @@ func (p *tailnetPath) forwardDNS(q dnsQuestion, info ipPacketInfo, reply func([]
 	}()
 }
 
-func (p *tailnetPath) exchangeDNS(ctx context.Context, query []byte, viaSSH bool) ([]byte, error) {
+// exchangeDNS asks the upstream servers; SSH carries only TCP, and overTCP
+// keeps a TCP client's query on TCP.
+func (p *tailnetPath) exchangeDNS(ctx context.Context, query []byte, viaSSH, overTCP bool) ([]byte, error) {
 	var lastErr error
 	for _, server := range p.upstream {
 		var resp []byte
 		var err error
-		if viaSSH {
-			resp, err = dnsExchangeTCP(ctx, p.socks, server, query)
-		} else {
+		switch {
+		case viaSSH:
+			resp, err = dnsExchangeTCP(ctx, p.egressTCP(), server, query)
+		case overTCP:
+			resp, err = dnsExchangeTCP(ctx, p.direct, server, query)
+		default:
 			resp, err = dnsExchangeUDP(ctx, p.direct, server, query)
 		}
 		if err == nil {
@@ -717,26 +755,26 @@ func (d *routedDialer) DialTCP(ctx context.Context, addr string) (net.Conn, erro
 		return p.serveDNSOverTCP(), nil
 	}
 	if name, ok := p.fake.host(ip); ok {
-		if p.socks == nil {
+		if !p.egressOn {
 			return nil, fmt.Errorf("no SSH egress for %s", name)
 		}
-		return p.socks.DialTCP(ctx, net.JoinHostPort(name, port))
+		return p.egressTCP().DialTCP(ctx, net.JoinHostPort(name, port))
 	}
 	switch p.egressFor(ip) {
 	case egressSSH:
-		return p.socks.DialTCP(ctx, addr)
+		return p.egressTCP().DialTCP(ctx, addr)
 	case egressTailnet:
 		portNum, err := strconv.ParseUint(port, 10, 16)
 		if err != nil {
 			return nil, err
 		}
-		return p.tailnetDial(ctx, netip.AddrPortFrom(ip, uint16(portNum)))
+		return p.dialTailnet(ctx, netip.AddrPortFrom(ip, uint16(portNum)))
 	}
 	return p.direct.DialTCP(ctx, addr)
 }
 
 func (d *routedDialer) DialUDP(ctx context.Context, addr string) (udpConn, error) {
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -744,11 +782,24 @@ func (d *routedDialer) DialUDP(ctx context.Context, addr string) (udpConn, error
 	if err != nil {
 		return nil, err
 	}
-	// Tailnet UDP never reaches the netstack; SSH carries only TCP.
-	if _, ok := d.p.fake.host(ip); ok || d.p.egressFor(ip) != egressDirect {
-		return nil, fmt.Errorf("no UDP over SSH to %s", addr)
+	p := d.p
+	// TSSH carries UDP; SSH carries only TCP. Tailnet UDP never gets here.
+	if name, ok := p.fake.host(ip); ok {
+		if u := p.egressUDP(); u != nil {
+			return u.DialUDP(ctx, net.JoinHostPort(name, port))
+		}
+		return nil, fmt.Errorf("no UDP over SSH to %s", name)
 	}
-	return d.p.direct.DialUDP(ctx, addr)
+	switch p.egressFor(ip) {
+	case egressSSH:
+		if u := p.egressUDP(); u != nil {
+			return u.DialUDP(ctx, addr)
+		}
+		return nil, fmt.Errorf("no UDP over SSH to %s", addr)
+	case egressTailnet:
+		return nil, fmt.Errorf("tailnet UDP is not proxied: %s", addr)
+	}
+	return p.direct.DialUDP(ctx, addr)
 }
 
 // dialsIPv6 lets IPv6 flows through unless they'd need SSH.
@@ -774,10 +825,10 @@ const (
 // egressFor picks where a flow our netstack terminated goes: an SSH rule
 // first, then the tailnet, then the default.
 func (p *tailnetPath) egressFor(ip netip.Addr) egressKind {
-	if p.socks != nil && p.table.matchIP(ip) == routeSSH {
+	if p.egressOn && p.table.matchIP(ip) == routeSSH {
 		return egressSSH
 	}
-	if p.tailnetDial != nil && p.state.Load().routesContain(ip) {
+	if p.state.Load().routesContain(ip) {
 		return egressTailnet
 	}
 	if p.viaSSH(ip) {
@@ -787,7 +838,7 @@ func (p *tailnetPath) egressFor(ip netip.Addr) egressKind {
 }
 
 func (p *tailnetPath) viaSSH(ip netip.Addr) bool {
-	if p.socks == nil {
+	if !p.egressOn {
 		return false
 	}
 	switch p.table.matchIP(ip) {
@@ -855,7 +906,7 @@ func (p *tailnetPath) networkSettings() tunnelNetworkSettings {
 	}
 
 	sshHosts := p.table.dnsDomains(routeSSH)
-	if p.socks != nil {
+	if p.egressOn {
 		for _, pfx := range p.table.prefixes(routeSSH) {
 			addRoute(pfx)
 		}

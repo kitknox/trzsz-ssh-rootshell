@@ -29,6 +29,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,18 +48,37 @@ type flowRegistry struct {
 type flowEntry struct {
 	ep     tcpip.Endpoint
 	cancel context.CancelFunc
+	dst    netip.Addr
 }
 
 func newFlowRegistry() *flowRegistry {
 	return &flowRegistry{flows: make(map[uint64]flowEntry)}
 }
 
-func (r *flowRegistry) add(ep tcpip.Endpoint, cancel context.CancelFunc) uint64 {
+func (r *flowRegistry) add(ep tcpip.Endpoint, cancel context.CancelFunc, dst netip.Addr) uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seq++
-	r.flows[r.seq] = flowEntry{ep: ep, cancel: cancel}
+	r.flows[r.seq] = flowEntry{ep: ep, cancel: cancel, dst: dst.Unmap()}
 	return r.seq
+}
+
+// abortMatching RSTs the flows whose destination matches.
+func (r *flowRegistry) abortMatching(match func(dst netip.Addr) bool) int {
+	r.mu.Lock()
+	var hit []flowEntry
+	for id, f := range r.flows {
+		if match(f.dst) {
+			hit = append(hit, f)
+			delete(r.flows, id)
+		}
+	}
+	r.mu.Unlock()
+	for _, f := range hit {
+		f.ep.Abort()
+		f.cancel()
+	}
+	return len(hit)
 }
 
 func (r *flowRegistry) remove(id uint64) {

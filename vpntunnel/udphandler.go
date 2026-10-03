@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -54,10 +55,10 @@ type udpForwarder struct {
 	dialer     udpDialer
 	stats      *tunnelStats
 	isDNS      func(addr string) bool
-	tcpDial    tcpDialer // for DNS-over-TCP fallback (SSH mode)
-	blockQUIC  bool
-	maxPayload int  // largest inner UDP payload the TUN MTU can carry
-	dnsViaTCP  bool // answer port 53 through tcpDial even when dialer is set
+	tcpDial    tcpDialer   // for DNS-over-TCP fallback (SSH mode)
+	blockQUIC  atomic.Bool // Tailscale mode flips it when a TSSH egress attaches
+	maxPayload int         // largest inner UDP payload the TUN MTU can carry
+	dnsViaTCP  bool        // answer port 53 through tcpDial even when dialer is set
 
 	mu    sync.Mutex
 	conns map[string]*udpConnTracker // key: "srcAddr->dstAddr"
@@ -81,11 +82,10 @@ func newUDPForwarder(dialer udpDialer, tcpDial tcpDialer, stats *tunnelStats, bl
 	if datagramBudget > 0 && datagramBudget < maxPayload {
 		maxPayload = datagramBudget
 	}
-	return &udpForwarder{
+	f := &udpForwarder{
 		dialer:     dialer,
 		stats:      stats,
 		tcpDial:    tcpDial,
-		blockQUIC:  blockQUIC,
 		maxPayload: maxPayload,
 		isDNS: func(addr string) bool {
 			_, port, _ := net.SplitHostPort(addr)
@@ -93,6 +93,8 @@ func newUDPForwarder(dialer udpDialer, tcpDial tcpDialer, stats *tunnelStats, bl
 		},
 		conns: make(map[string]*udpConnTracker),
 	}
+	f.blockQUIC.Store(blockQUIC)
+	return f
 }
 
 // allowFlow decides whether a new UDP flow to dstPort may be forwarded.
@@ -104,7 +106,7 @@ func (f *udpForwarder) allowFlow(dstPort uint16) bool {
 		// SSH mode: only DNS (answered via DNS-over-TCP) is supported.
 		return dstPort == 53
 	}
-	return !((f.blockQUIC || captureBlocking()) && dstPort == 443)
+	return !((f.blockQUIC.Load() || captureBlocking()) && dstPort == 443)
 }
 
 // closePort tears down every tracked UDP flow to dstPort (e.g. QUIC when

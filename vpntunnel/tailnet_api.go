@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+
+	"github.com/trzsz/tsshd/tsshd"
 )
 
 // The Tailscale API is exported from every slice. Only builds tagged
@@ -64,6 +66,9 @@ type tailscaleConfigJSON struct {
 	Hostname     string `json:"hostname,omitempty"`
 	AcceptRoutes bool   `json:"acceptRoutes,omitempty"`
 	StateDir     string `json:"stateDir,omitempty"` // scratch directory, no secrets
+	// "tssh": SSH rules apply now; the tsshd egress attaches later
+	// (TailscaleAttachTSSH). SSH egress uses socks5Address instead.
+	Egress string `json:"egress,omitempty"`
 }
 
 // tailscaleStateJSON is what OnTailscaleState delivers.
@@ -123,8 +128,9 @@ func StartTailscaleTunnel(configJSON string, store TailscaleStateStore, tsCallba
 		return fmt.Errorf("vpntunnel: tailscale needs a state store")
 	}
 
+	tsshEgress := extra.Tailscale.Egress == "tssh"
 	limit := int64(tailnetHeapLimitBytes)
-	if cfg.SOCKS5Address != "" {
+	if cfg.SOCKS5Address != "" || tsshEgress {
 		limit = tailnetSSHHeapLimitBytes
 	}
 	// Capture restores these when it stops.
@@ -132,7 +138,7 @@ func StartTailscaleTunnel(configJSON string, store TailscaleStateStore, tsCallba
 
 	cfg.MTU = tailnetMTU
 	stats := &tunnelStats{}
-	p := newTailnetPath(cfg, extra.Routing, stats)
+	p := newTailnetPath(cfg, extra.Routing, tsshEgress, stats)
 	eng, err := startTailnetEngine(p, extra.Tailscale, store, tsCallback)
 	if err != nil {
 		p.close()
@@ -166,6 +172,54 @@ func currentTailnet() (tailnetEngine, *tailnetPath) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	return globalTailnet, globalTailnetPath
+}
+
+// TailscaleAttachTSSH connects the TSSH egress of a Tailscale tunnel started
+// with tailscale.egress "tssh". configJSON is a tssh VPNTunnelConfig built
+// from tsshd's spawn output; relay, if non-nil, is a prepared jump relay that
+// Go owns on success. Attaching again replaces the previous egress.
+func TailscaleAttachTSSH(configJSON string, relay *Relay) error {
+	_, p := currentTailnet()
+	if p == nil {
+		return fmt.Errorf("vpntunnel: tailscale is not running")
+	}
+	if !p.egressOn {
+		return fmt.Errorf("vpntunnel: tailscale tunnel has no SSH egress")
+	}
+	cfg, err := ParseConfig(configJSON)
+	if err != nil {
+		return err
+	}
+	if cfg.TransportType != "tssh" {
+		return fmt.Errorf("vpntunnel: TailscaleAttachTSSH needs transportType tssh, got %q", cfg.TransportType)
+	}
+	var proxy *tsshd.SshUdpClient
+	if relay != nil {
+		if proxy, err = relay.connectedClient(); err != nil {
+			return err
+		}
+		mtu, err := relay.EffectiveMTU(cfg.TSSHMTU, cfg.TSSHMode)
+		if err != nil {
+			return err
+		}
+		if mtu != cfg.TSSHMTU {
+			return fmt.Errorf("target MTU must match relay budget: %d", mtu)
+		}
+	}
+	if cfg.TSSHRelayRequired && proxy == nil {
+		return fmt.Errorf("tssh relay is required")
+	}
+	client, err := connectTSSH(cfg, proxy)
+	if err != nil {
+		return fmt.Errorf("vpntunnel: tssh connect: %w", err)
+	}
+	d := &tsshDialer{client: client}
+	p.setEgress(&egressDialers{tcp: d, udp: d, close: func() {
+		_ = client.Close()
+		relay.Close()
+	}}, int(client.GetMaxDatagramSize()) >= minQUICPayload)
+	log.Printf("vpntunnel: tailscale tssh egress attached (datagram budget %d)", client.GetMaxDatagramSize())
+	return nil
 }
 
 // TailscaleLogin starts an interactive login; the URL arrives through

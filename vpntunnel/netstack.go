@@ -31,6 +31,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -92,6 +93,11 @@ type tunnelStack struct {
 	mtu      int
 	tcpSem   chan struct{}    // limits concurrent TCP flows
 	packetCh chan packetEntry // outbound packets for batch reading
+
+	// Tailscale mode: a second NIC facing WireGuard, for capture's own
+	// connections to tailnet hosts (tailnetlink.go). Created on first use.
+	linkMu sync.Mutex
+	link   *channel.Endpoint
 }
 
 // newTunnelStack creates a new gVisor netstack with TCP/UDP forwarders.
@@ -447,7 +453,8 @@ func handleTCPForward(ctx context.Context, r *tcp.ForwarderRequest, dialer tcpDi
 	defer stats.connClosedTCP()
 
 	if env != nil {
-		flowID := env.flows.add(ep, connCancel)
+		dst, _ := netip.AddrFromSlice(id.LocalAddress.AsSlice())
+		flowID := env.flows.add(ep, connCancel, dst)
 		defer env.flows.remove(flowID)
 	}
 

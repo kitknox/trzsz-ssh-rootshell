@@ -222,25 +222,11 @@ func startTailnetEngine(path *tailnetPath, conf tailscaleConfigJSON, store Tails
 
 	activeNetMon.Store(netMon)
 	e.closers = append(e.closers, func() { activeNetMon.CompareAndSwap(netMon, nil) })
-	// HTTP capture re-dials tailnet flows through Tailscale's netstack. Its
-	// replies only reach gVisor with CheckLocalTransportEndpoints, a lookup
-	// on every inbound packet, so that is on only while recording. (Tailscale
-	// reads the flag unlocked; a stale read just delays the switch.)
-	path.tailnetDial = func(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-		src := e.localAddr(dst.Addr().Is4())
-		if !src.IsValid() {
-			return nil, fmt.Errorf("no tailnet address for %v", dst)
-		}
-		c, err := ns.DialContextTCPWithBind(ctx, src, dst)
-		if err != nil {
-			return nil, err
-		}
-		return c, nil
+	dnsManager := sys.DNSManager.Get()
+	path.tailscaleQuery = func(ctx context.Context, query []byte) ([]byte, error) {
+		return dnsManager.Query(ctx, query, "tcp", netip.AddrPortFrom(e.localAddr(true), 0))
 	}
-	path.onCaptureChange = func(capturing bool) {
-		ns.CheckLocalTransportEndpoints = capturing
-		e.wake()
-	}
+	path.onCaptureChange = func(bool) { e.wake() }
 	path.setBackend(e.tun)
 
 	go e.emitLoop()
