@@ -43,6 +43,24 @@ func lanIPv4(t *testing.T) net.IP {
 	return nil
 }
 
+// pinDirectTo binds Direct dials to the interface holding ip, as the
+// provider's interface monitor would; unpinned Direct dials are refused.
+func pinDirectTo(t *testing.T, ip net.IP) {
+	t.Helper()
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && ipn.IP.Equal(ip) {
+				SetDirectInterface(iface.Index)
+				t.Cleanup(func() { SetDirectInterface(0) })
+				return
+			}
+		}
+	}
+	t.Skip("no interface for", ip)
+}
+
 // appStack is a second gVisor stack playing the device's apps, wired to the
 // tunnel through InjectPacket / ReadPacket like the Swift packet loops.
 type appStack struct {
@@ -141,6 +159,7 @@ func within(t *testing.T, name string, d time.Duration, f func()) {
 
 func TestDirectTunnelCaptureLifecycle(t *testing.T) {
 	ip := lanIPv4(t)
+	pinDirectTo(t, ip)
 	certPEM, keyPEM, pool := newTestCA(t)
 	ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {

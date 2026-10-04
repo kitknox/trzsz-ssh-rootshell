@@ -26,6 +26,7 @@ package vpntunnel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync/atomic"
@@ -45,11 +46,16 @@ const (
 var directInterface atomic.Int64
 
 // SetDirectInterface sets the interface index Direct-mode sockets bind to
-// (0 = unbound). The provider updates it as the network path changes.
+// (0 = none known: Direct dials fail). The provider updates it as the network
+// path changes.
 func SetDirectInterface(index int) {
 	directInterface.Store(int64(index))
 	tailnetInterfaceChanged(index)
 }
+
+// errNoDirectInterface fails a Direct dial closed: unpinned, it would follow
+// the tunnel's own routes back into the tunnel.
+var errNoDirectInterface = errors.New("no physical network interface for direct traffic")
 
 // directDialer dials upstream from the provider process itself, pinned to the
 // physical interface (boundIf, else the live directInterface).
@@ -57,14 +63,17 @@ type directDialer struct {
 	boundIf int
 }
 
-func (d *directDialer) dialer() *net.Dialer {
-	dl := &net.Dialer{Timeout: dialTimeout}
+func (d *directDialer) dialer() (*net.Dialer, error) {
 	idx := d.boundIf
 	if idx == 0 {
 		idx = int(directInterface.Load())
 	}
-	if idx > 0 {
-		dl.Control = func(network, _ string, c syscall.RawConn) error {
+	if idx <= 0 {
+		return nil, errNoDirectInterface
+	}
+	return &net.Dialer{
+		Timeout: dialTimeout,
+		Control: func(network, _ string, c syscall.RawConn) error {
 			var sockErr error
 			err := c.Control(func(fd uintptr) {
 				if network == "tcp6" || network == "udp6" {
@@ -77,13 +86,16 @@ func (d *directDialer) dialer() *net.Dialer {
 				return err
 			}
 			return sockErr
-		}
-	}
-	return dl
+		},
+	}, nil
 }
 
 func (d *directDialer) DialTCP(ctx context.Context, addr string) (net.Conn, error) {
-	conn, err := d.dialer().DialContext(ctx, "tcp", addr)
+	dl, err := d.dialer()
+	if err != nil {
+		return nil, fmt.Errorf("direct dial tcp %s: %w", addr, err)
+	}
+	conn, err := dl.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("direct dial tcp %s: %w", addr, err)
 	}
@@ -91,7 +103,11 @@ func (d *directDialer) DialTCP(ctx context.Context, addr string) (net.Conn, erro
 }
 
 func (d *directDialer) DialUDP(ctx context.Context, addr string) (udpConn, error) {
-	conn, err := d.dialer().DialContext(ctx, "udp", addr)
+	dl, err := d.dialer()
+	if err != nil {
+		return nil, fmt.Errorf("direct dial udp %s: %w", addr, err)
+	}
+	conn, err := dl.DialContext(ctx, "udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("direct dial udp %s: %w", addr, err)
 	}

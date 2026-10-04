@@ -69,12 +69,19 @@ const maxStatusPeers = 500
 // activeNetMon lets SetDirectInterface nudge Tailscale after a path change.
 var activeNetMon atomic.Pointer[netmon.Monitor]
 
+// noDefaultRouteIfName never names a real interface. netmon ignores "", so
+// storing this is how the stale interface is cleared: lookups of it fail and
+// Tailscale falls back to reading the routing table.
+const noDefaultRouteIfName = "rootshell-none"
+
 func tailnetInterfaceChanged(index int) {
+	name := noDefaultRouteIfName
 	if index > 0 {
 		if ifc, err := net.InterfaceByIndex(index); err == nil {
-			netmon.UpdateLastKnownDefaultRouteInterface(ifc.Name)
+			name = ifc.Name
 		}
 	}
+	netmon.UpdateLastKnownDefaultRouteInterface(name)
 	if m := activeNetMon.Load(); m != nil {
 		m.InjectEvent()
 	}

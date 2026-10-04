@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/route"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -442,6 +444,7 @@ func TestDNSExchangeKeepsTCP(t *testing.T) {
 
 	p, _ := testPath(t, routingConfigJSON{}, false)
 	p.upstream = []string{ln.Addr().String()}
+	pinDirectTo(t, net.ParseIP("127.0.0.1"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	resp, err := p.exchangeDNS(ctx, dnsQuery(t, "big.example.org.", dnsmessage.TypeA), false, true)
@@ -774,6 +777,63 @@ func TestTailnetTSSHEgress(t *testing.T) {
 	p.setEgress(&egressDialers{tcp: egressDown{}}, false)
 	if !eg.done || !ts.udpFwd.blockQUIC.Load() {
 		t.Fatal("old egress not closed or QUIC not re-blocked")
+	}
+}
+
+func TestDirectDialFailsClosedWithoutInterface(t *testing.T) {
+	SetDirectInterface(0)
+	if _, err := (&directDialer{}).DialTCP(context.Background(), "192.0.2.1:443"); !errors.Is(err, errNoDirectInterface) {
+		t.Fatalf("unpinned direct dial: %v", err)
+	}
+	if _, err := (&directDialer{}).DialUDP(context.Background(), "192.0.2.1:53"); !errors.Is(err, errNoDirectInterface) {
+		t.Fatalf("unpinned direct UDP dial: %v", err)
+	}
+}
+
+func TestPickDirectInterface(t *testing.T) {
+	ifaces, _ := net.Interfaces()
+	var all []string
+	loopback := 0
+	for _, ifc := range ifaces {
+		all = append(all, itoa(ifc.Index))
+		if ifc.Flags&net.FlagLoopback != 0 {
+			loopback = ifc.Index
+		}
+	}
+	if got := PickDirectInterface(itoa(loopback)); got != 0 {
+		t.Fatalf("loopback picked: %d", got)
+	}
+	if got := PickDirectInterface(""); got != 0 {
+		t.Fatalf("empty candidates picked %d", got)
+	}
+	// On this machine: whatever is picked must reach a gateway and be usable.
+	got := PickDirectInterface(strings.Join(all, ","))
+	if got == 0 {
+		t.Skip("no interface with a default route here")
+	}
+	ifc, err := net.InterfaceByIndex(got)
+	if err != nil || !usableDirectInterface(ifc) || !defaultGatewayInterfaces()[got] {
+		t.Fatalf("picked %d (%v) without a usable default route", got, ifc)
+	}
+}
+
+func TestIsDefaultDestination(t *testing.T) {
+	zero4 := &route.Inet4Addr{}
+	host := &route.Inet4Addr{IP: [4]byte{10, 0, 0, 1}}
+	mask24 := &route.Inet4Addr{IP: [4]byte{255, 255, 255, 0}}
+	for _, tc := range []struct {
+		addrs []route.Addr
+		want  bool
+	}{
+		{[]route.Addr{zero4, host, zero4}, true},
+		{[]route.Addr{zero4, host}, true}, // no netmask sent
+		{[]route.Addr{zero4, host, mask24}, false},
+		{[]route.Addr{host, host, zero4}, false},
+		{[]route.Addr{&route.Inet6Addr{}, host, &route.Inet6Addr{}}, true},
+	} {
+		if got := isDefaultDestination(tc.addrs); got != tc.want {
+			t.Errorf("isDefaultDestination(%v) = %v, want %v", tc.addrs, got, tc.want)
+		}
 	}
 }
 
