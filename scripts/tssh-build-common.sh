@@ -113,6 +113,16 @@ tssh_prepare_build_module() {
     export TSSH_BUILD_MODULE_DIR TSSH_GOWORK
 }
 
+# Build tags for slices that contain Tailscale. The omit list comes from the
+# pinned tailscale.com module, so it tracks go.sum. $1 is the feature list.
+tssh_tailscale_build_tags() {
+    local tags
+    tags="$(cd "$TSSH_BUILD_MODULE_DIR" && GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
+        go run tailscale.com/cmd/featuretags --min --add="$1")" \
+        || tssh_error "could not resolve Tailscale feature tags"
+    echo "rootshell_tailscale,$tags"
+}
+
 tssh_write_generated_module() {
     local generated_dir="$1"
     local module_path="$2"
@@ -122,7 +132,7 @@ tssh_write_generated_module() {
     cat > "$generated_dir/go.mod" <<EOF
 module gobind
 
-go 1.25.0
+go 1.26.5
 
 require (
     $module_path v0.0.0
@@ -131,6 +141,11 @@ require (
 
 replace $module_path => $module_source
 EOF
+
+    # The in-app Tailscale engine lives in the nested vpntunnel module.
+    if [[ "$module_path" == "github.com/trzsz/trzsz-ssh" ]]; then
+        printf "replace github.com/trzsz/trzsz-ssh/vpntunnel => %s/vpntunnel\n" "$module_source" >> "$generated_dir/go.mod"
+    fi
 
     if [[ "${DEPENDENCY_MODE:-local}" == "local" ]]; then
         printf 'replace github.com/trzsz/tsshd => %s\n' "$TSSHD_DIR" >> "$generated_dir/go.mod"

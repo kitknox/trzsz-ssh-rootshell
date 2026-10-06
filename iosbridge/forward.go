@@ -26,10 +26,12 @@ package iosbridge
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -499,6 +501,13 @@ func (pf *PortForwarder) handleSOCKS5Connection(ctx context.Context, forwardID s
 // Returns the target host and port from the CONNECT request.
 // Post-negotiation errors are returned as *socks5Error with the appropriate REP code.
 func socks5Handshake(conn net.Conn) (string, int, error) {
+	return socks5HandshakeAuth(conn, nil)
+}
+
+// socks5Credentials, when non-nil, requires RFC 1929 username/password auth.
+type socks5Credentials struct{ user, pass string }
+
+func socks5HandshakeAuth(conn net.Conn, creds *socks5Credentials) (string, int, error) {
 	// Method negotiation
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
@@ -513,23 +522,22 @@ func socks5Handshake(conn net.Conn) (string, int, error) {
 		return "", 0, fmt.Errorf("read methods: %w", err)
 	}
 
-	// Verify the client offers no-auth (0x00)
-	hasNoAuth := false
-	for _, m := range methods {
-		if m == 0x00 {
-			hasNoAuth = true
-			break
-		}
+	want := byte(0x00) // no auth
+	if creds != nil {
+		want = 0x02 // username/password
 	}
-	if !hasNoAuth {
+	if !slices.Contains(methods, want) {
 		// Reply with 0xFF = no acceptable methods
 		_, _ = conn.Write([]byte{0x05, 0xFF})
-		return "", 0, fmt.Errorf("client does not offer no-auth method")
+		return "", 0, fmt.Errorf("client does not offer SOCKS method %d", want)
 	}
-
-	// Reply: no auth required
-	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+	if _, err := conn.Write([]byte{0x05, want}); err != nil {
 		return "", 0, fmt.Errorf("write method reply: %w", err)
+	}
+	if creds != nil {
+		if err := socks5CheckPassword(conn, *creds); err != nil {
+			return "", 0, err
+		}
 	}
 
 	// CONNECT request
@@ -580,6 +588,40 @@ func socks5Handshake(conn net.Conn) (string, int, error) {
 	port := int(binary.BigEndian.Uint16(portBuf))
 
 	return host, port, nil
+}
+
+// socks5CheckPassword runs the RFC 1929 sub-negotiation.
+func socks5CheckPassword(conn net.Conn, creds socks5Credentials) error {
+	read := func() ([]byte, error) {
+		n := make([]byte, 1)
+		if _, err := io.ReadFull(conn, n); err != nil {
+			return nil, err
+		}
+		b := make([]byte, n[0])
+		_, err := io.ReadFull(conn, b)
+		return b, err
+	}
+	ver := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ver); err != nil {
+		return fmt.Errorf("read auth version: %w", err)
+	}
+	user, err := read()
+	if err != nil {
+		return fmt.Errorf("read username: %w", err)
+	}
+	pass, err := read()
+	if err != nil {
+		return fmt.Errorf("read password: %w", err)
+	}
+	ok := ver[0] == 0x01 &&
+		subtle.ConstantTimeCompare(user, []byte(creds.user)) == 1 &&
+		subtle.ConstantTimeCompare(pass, []byte(creds.pass)) == 1
+	if !ok {
+		_, _ = conn.Write([]byte{0x01, 0x01})
+		return fmt.Errorf("SOCKS authentication failed")
+	}
+	_, err = conn.Write([]byte{0x01, 0x00})
+	return err
 }
 
 // socks5SendReply sends a SOCKS5 reply with the given status code.

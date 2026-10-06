@@ -30,6 +30,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 source "$SCRIPT_DIR/tssh-build-common.sh"
 
+# Tailscale features for the in-app engine (userspace netstack). Exit nodes
+# need useexitnode; the VPN extension leaves them out.
+TSSH_TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock,useexitnode"
+
 TRZSZ_SSH_DIR="${TRZSZ_SSH_DIR:-}"
 TSSHD_DIR="${TSSHD_DIR:-}"
 KCP_GO_DIR="${KCP_GO_DIR:-}"
@@ -172,6 +176,9 @@ build_ios_frameworks() {
     log "  Building for targets: ios,iossimulator"
     log "  This may take several minutes..."
 
+    local ts_tags
+    ts_tags="$(tssh_tailscale_build_tags "$TSSH_TAILSCALE_FEATURES")" || error "could not resolve Tailscale feature tags"
+
     # Build using gomobile for iOS and iOS Simulator
     # Note: Mac Catalyst is built separately due to gomobile's hardcoded ios13.0
     GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
@@ -179,6 +186,7 @@ build_ios_frameworks() {
         $VERBOSE_FLAG \
         -trimpath \
         -ldflags="-s -w -buildid=" \
+        -tags="$ts_tags" \
         -target="ios,iossimulator" \
         -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME.xcframework" \
         ./iosbridge
@@ -214,6 +222,8 @@ build_maccatalyst_framework() {
     cd "$WORK_DIR/src/gobind"
 
     # Get SDK path
+    local ts_tags
+    ts_tags="$(tssh_tailscale_build_tags "$TSSH_TAILSCALE_FEATURES")" || error "could not resolve Tailscale feature tags"
     local CATALYST_SDK=$(xcrun --sdk macosx --show-sdk-path)
     local CC=$(xcrun --sdk macosx --find clang)
 
@@ -226,7 +236,7 @@ build_maccatalyst_framework() {
     CGO_CFLAGS="-target arm64-apple-ios${MIN_IOS_VERSION}-macabi -isysroot $CATALYST_SDK" \
     CGO_LDFLAGS="-target arm64-apple-ios${MIN_IOS_VERSION}-macabi -isysroot $CATALYST_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags=ios -o "$TRZSZ_SSH_DIR/TrzszSSH-catalyst-arm64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="ios,$ts_tags" -o "$TRZSZ_SSH_DIR/TrzszSSH-catalyst-arm64.a" .
 
     # Build for x86_64 Mac Catalyst
     log "  Building x86_64-apple-ios${MIN_IOS_VERSION}-macabi..."
@@ -237,7 +247,7 @@ build_maccatalyst_framework() {
     CGO_CFLAGS="-target x86_64-apple-ios${MIN_IOS_VERSION}-macabi -isysroot $CATALYST_SDK" \
     CGO_LDFLAGS="-target x86_64-apple-ios${MIN_IOS_VERSION}-macabi -isysroot $CATALYST_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags=ios -o "$TRZSZ_SSH_DIR/TrzszSSH-catalyst-amd64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="ios,$ts_tags" -o "$TRZSZ_SSH_DIR/TrzszSSH-catalyst-amd64.a" .
 
     # Create universal binary
     log "  Creating universal binary..."
@@ -356,6 +366,9 @@ build_visionos_frameworks() {
     cd "$WORK_DIR/src/gobind"
 
     # visionOS Device
+    local ts_tags
+    ts_tags="$(tssh_tailscale_build_tags "$TSSH_TAILSCALE_FEATURES")" || error "could not resolve Tailscale feature tags"
+
     log "  Building arm64-apple-xros${MIN_VISIONOS_VERSION} (device)..."
     local XROS_SDK=$(xcrun --sdk xros --show-sdk-path)
     local XROS_CC=$(xcrun --sdk xros --find clang)
@@ -367,7 +380,7 @@ build_visionos_frameworks() {
     CGO_CFLAGS="-target arm64-apple-xros${MIN_VISIONOS_VERSION} -isysroot $XROS_SDK" \
     CGO_LDFLAGS="-target arm64-apple-xros${MIN_VISIONOS_VERSION} -isysroot $XROS_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags=ios -o "$TRZSZ_SSH_DIR/TrzszSSH-xros-arm64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="ios,$ts_tags" -o "$TRZSZ_SSH_DIR/TrzszSSH-xros-arm64.a" .
 
     # visionOS Simulator
     log "  Building arm64-apple-xros${MIN_VISIONOS_VERSION}-simulator..."
@@ -381,7 +394,7 @@ build_visionos_frameworks() {
     CGO_CFLAGS="-target arm64-apple-xros${MIN_VISIONOS_VERSION}-simulator -isysroot $XROS_SIM_SDK" \
     CGO_LDFLAGS="-target arm64-apple-xros${MIN_VISIONOS_VERSION}-simulator -isysroot $XROS_SIM_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags=ios -o "$TRZSZ_SSH_DIR/TrzszSSH-xros-sim-arm64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="ios,$ts_tags" -o "$TRZSZ_SSH_DIR/TrzszSSH-xros-sim-arm64.a" .
 
     # Create visionOS device framework
     local XROS_FW="$TRZSZ_SSH_DIR/TrzszSSH.framework.xros"
@@ -728,6 +741,17 @@ verify_framework() {
             error "Go bindings are not exported correctly"
         fi
     fi
+
+    # Every slice carries the in-app Tailscale engine. Go keeps function names
+    # in pclntab even when stripped, so a grep finds it.
+    local slice lib marker="tailscale.com/wgengine.NewUserspaceEngine"
+    for slice in ios-arm64 "ios-arm64_x86_64-simulator" ios-arm64-simulator "ios-arm64_x86_64-maccatalyst" xros-arm64 xros-arm64-simulator; do
+        [[ -d "$FRAMEWORK_PATH/$slice" ]] || continue
+        lib=$(find "$FRAMEWORK_PATH/$slice" -type f \( -name "lib$FRAMEWORK_NAME.a" -o -name "$FRAMEWORK_NAME" \) | head -1)
+        [[ -n "$lib" ]] || error "$slice has no library"
+        LC_ALL=C grep -a -q "$marker" "$lib" || error "$slice is missing Tailscale"
+        log "  ✓ $slice includes Tailscale ($(du -h "$lib" | cut -f1))"
+    done
 
     log "Framework verification complete!"
 }

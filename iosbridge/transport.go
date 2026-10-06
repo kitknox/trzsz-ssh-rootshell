@@ -476,6 +476,9 @@ func connectTransport(config *TransportConfig, proxy *Transport) (*Transport, er
 			}
 		},
 	}
+	if proxy == nil {
+		useTailnetForTransport(opts, config.Host)
+	}
 	if proxy != nil {
 		opts.ProxyClient = proxy.client
 		mtu, err := proxy.EffectiveRelayMTU(config.Mtu, config.Mode)

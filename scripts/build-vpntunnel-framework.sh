@@ -51,14 +51,8 @@ MIN_MACOS_VERSION="15.0"
 # compiled out.
 TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock"
 
-# Build tags for the Tailscale slices. The omit list comes from the pinned
-# tailscale.com module, so it tracks go.sum.
 tailscale_build_tags() {
-    local tags
-    tags="$(cd "$TSSH_BUILD_MODULE_DIR" && GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-        go run tailscale.com/cmd/featuretags --min --add="$TAILSCALE_FEATURES")" \
-        || error "could not resolve Tailscale feature tags"
-    echo "rootshell_tailscale,$tags"
+    tssh_tailscale_build_tags "$TAILSCALE_FEATURES"
 }
 
 # Parse arguments
