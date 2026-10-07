@@ -59,6 +59,14 @@ func tailnetDefaultInterfaceChanged(name string) {
 	}
 }
 
+func tailnetResetSockets() error {
+	b, ok := currentTailnetBackend().(*inAppTailnet)
+	if !ok {
+		return nil
+	}
+	return b.core.ResetSockets()
+}
+
 type inAppTailnet struct {
 	core *tsengine.Engine
 	cb   TailnetCallback

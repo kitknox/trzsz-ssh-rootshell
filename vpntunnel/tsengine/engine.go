@@ -56,6 +56,7 @@ import (
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/magicsock"
 	"tailscale.com/wgengine/netstack"
 	"tailscale.com/wgengine/router"
 )
@@ -111,6 +112,9 @@ type Engine struct {
 	ctx      context.Context
 	stop     context.CancelFunc
 	onChange func()
+	logf     logger.Logf
+	wg       wgengine.Engine
+	magic    *magicsock.Conn
 
 	mu        sync.Mutex
 	state     ipn.State
@@ -132,7 +136,7 @@ func Start(conf Config) (_ *Engine, reterr error) {
 	if conf.Store == nil {
 		return nil, fmt.Errorf("tailscale needs a state store")
 	}
-	e := &Engine{onChange: conf.OnChange, Userspace: conf.Tun == nil}
+	e := &Engine{onChange: conf.OnChange, Userspace: conf.Tun == nil, logf: logf}
 	e.ctx, e.stop = context.WithCancel(context.Background())
 	defer func() {
 		if reterr != nil {
@@ -190,6 +194,7 @@ func Start(conf Config) (_ *Engine, reterr error) {
 		}
 	})
 	sys.Set(eng)
+	e.wg, e.magic = eng, sys.MagicSock.Get()
 
 	ns, err := netstack.Create(logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), dialer, sys.DNSManager.Get(), sys.ProxyMapper())
 	if err != nil {

@@ -350,3 +350,10 @@ func useTailnetForTransport(opts *tsshd.UdpClientOptions, host string) {
 func TailnetDefaultInterfaceChanged(name string) {
 	tailnetDefaultInterfaceChanged(name)
 }
+
+// TailnetResetSockets restarts the engine's UDP sockets. Call it when the app
+// returns from the background: iOS may have reclaimed them while suspended,
+// which leaves every peer relayed over DERP. Open connections survive.
+func TailnetResetSockets() error {
+	return tailnetResetSockets()
+}

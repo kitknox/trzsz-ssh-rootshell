@@ -1,4 +1,4 @@
-//go:build !rootshell_tailscale
+//go:build rootshell_tailscale
 
 /*
 MIT License
@@ -24,14 +24,35 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-package iosbridge
+package tsengine
 
-const tailnetBuilt = false
+import (
+	"context"
+	"testing"
 
-func startTailnetBackend(tailnetConfig, TailnetStateStore, TailnetCallback) (tailnetBackend, error) {
-	return nil, errTailnetNotBuilt
+	"tailscale.com/tsd"
+	"tailscale.com/wgengine"
+)
+
+// Fails when a Tailscale bump renames or retypes userspaceEngine.wgdev.
+func TestWireguardDevice(t *testing.T) {
+	sys := tsd.NewSystem()
+	eng, err := wgengine.NewFakeUserspaceEngine(t.Logf, 0, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get(), sys.Set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	e := &Engine{ctx: context.Background(), logf: t.Logf, wg: eng, magic: sys.MagicSock.Get()}
+	for range 2 {
+		if err := e.ResetSockets(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dev, err := wireguardDevice(eng)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.Bind() == nil {
+		t.Fatal("device has no bind after reset")
+	}
 }
-
-func tailnetDefaultInterfaceChanged(string) {}
-
-func tailnetResetSockets() error { return nil }
