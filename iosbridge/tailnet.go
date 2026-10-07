@@ -76,6 +76,8 @@ type inAppTailnet struct {
 
 	mu       sync.Mutex
 	lastEmit string
+
+	traffic tailnetTraffic
 }
 
 func toEnginePrefs(p tailnetPrefs) tsengine.Prefs {
@@ -150,6 +152,8 @@ func (t *inAppTailnet) statusJSON() string {
 	b, _ := json.Marshal(t.core.Status())
 	return string(b)
 }
+
+func (t *inAppTailnet) trafficJSON() string { return t.traffic.json() }
 
 func (t *inAppTailnet) setPrefs(p tailnetPrefs) error {
 	err := t.core.SetPrefs(toEnginePrefs(p))
@@ -297,10 +301,22 @@ func dnsFirstAddr(resp []byte) (netip.Addr, bool) {
 }
 
 func (t *inAppTailnet) dialTCP(ctx context.Context, dst netip.AddrPort) (net.Conn, error) {
-	return t.core.Dialer.UserDial(ctx, "tcp", dst.String())
+	c, err := t.core.Dialer.UserDial(ctx, "tcp", dst.String())
+	if err != nil {
+		return nil, err
+	}
+	return t.traffic.track(c, false), nil
 }
 
 func (t *inAppTailnet) dialUDP(ctx context.Context, dst netip.AddrPort, localPort uint16) (net.Conn, error) {
+	c, err := t.openUDP(ctx, dst, localPort)
+	if err != nil {
+		return nil, err
+	}
+	return t.traffic.track(c, true), nil
+}
+
+func (t *inAppTailnet) openUDP(ctx context.Context, dst netip.AddrPort, localPort uint16) (net.Conn, error) {
 	if localPort == 0 {
 		return t.core.Dialer.UserDial(ctx, "udp", dst.String())
 	}

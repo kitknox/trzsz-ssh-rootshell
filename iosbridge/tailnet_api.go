@@ -78,6 +78,8 @@ type tailnetBackend interface {
 	login() error
 	logout() error
 	statusJSON() string
+	// trafficJSON reports byte and connection counts since the engine started.
+	trafficJSON() string
 	setPrefs(tailnetPrefs) error
 	running() bool
 	// resolve returns the tailnet address for host, or false when host
@@ -356,4 +358,14 @@ func TailnetDefaultInterfaceChanged(name string) {
 // which leaves every peer relayed over DERP. Open connections survive.
 func TailnetResetSockets() error {
 	return tailnetResetSockets()
+}
+
+// TailnetTraffic returns byte and connection counts for rootshell's own
+// tailnet connections since the engine started, as JSON.
+func TailnetTraffic() string {
+	b := currentTailnetBackend()
+	if b == nil {
+		return "{}"
+	}
+	return b.trafficJSON()
 }
