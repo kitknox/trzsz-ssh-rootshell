@@ -31,3 +31,5 @@ const tailnetBuilt = false
 func startTailnetBackend(tailnetConfig, TailnetStateStore, TailnetCallback) (tailnetBackend, error) {
 	return nil, errTailnetNotBuilt
 }
+
+func tailnetDefaultInterfaceChanged(string) {}

@@ -342,3 +342,11 @@ func useTailnetForTransport(opts *tsshd.UdpClientOptions, host string) {
 	opts.DialTCP = dial(false)
 	opts.DialUDP = dial(true)
 }
+
+// TailnetDefaultInterfaceChanged reports the physical interface that carries
+// the default route ("en0", "pdp_ip0"; "" when offline). Tailscale on iOS
+// can't watch for this itself, so without it the engine keeps using sockets
+// on a network that is gone.
+func TailnetDefaultInterfaceChanged(name string) {
+	tailnetDefaultInterfaceChanged(name)
+}

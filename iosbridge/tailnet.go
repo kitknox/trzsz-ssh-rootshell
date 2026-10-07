@@ -39,10 +39,25 @@ import (
 	"github.com/trzsz/trzsz-ssh/vpntunnel/tsengine"
 	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn"
+	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsaddr"
 )
 
 const tailnetBuilt = true
+
+// noDefaultRouteIfName never names a real interface. netmon ignores "", so
+// this is how a lost network clears the stale one.
+const noDefaultRouteIfName = "rootshell-none"
+
+func tailnetDefaultInterfaceChanged(name string) {
+	if name == "" {
+		name = noDefaultRouteIfName
+	}
+	netmon.UpdateLastKnownDefaultRouteInterface(name)
+	if b, ok := currentTailnetBackend().(*inAppTailnet); ok {
+		b.core.NetMon.InjectEvent()
+	}
+}
 
 type inAppTailnet struct {
 	core *tsengine.Engine
