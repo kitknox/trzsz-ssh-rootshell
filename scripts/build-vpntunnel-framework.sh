@@ -7,7 +7,7 @@
 # Only the iOS, iOS Simulator and native macOS slices include the Tailscale engine.
 #
 # Prerequisites:
-#   - Go 1.26.5 (fetched through GOTOOLCHAIN when the host go is older)
+#   - Go 1.27.1 (fetched through GOTOOLCHAIN when the host go is older)
 #   - Xcode command line tools
 #
 # Usage:
@@ -360,6 +360,7 @@ build_macos_framework() {
 
     local MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path)
     local MACOS_CC=$(xcrun --sdk macosx --find clang)
+    # Go 1.27+ stamps go.o with its own macOS minimum unless -macos is passed.
 
     log "  Building arm64-apple-macos${MIN_MACOS_VERSION} (Tailscale: $TAILSCALE_FEATURES)..."
     CGO_ENABLED=1 \
@@ -369,7 +370,7 @@ build_macos_framework() {
     CGO_CFLAGS="-target arm64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     CGO_LDFLAGS="-target arm64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-arm64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid= -macos=${MIN_MACOS_VERSION}" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-arm64.a" .
 
     log "  Building x86_64-apple-macos${MIN_MACOS_VERSION}..."
     CGO_ENABLED=1 \
@@ -379,7 +380,7 @@ build_macos_framework() {
     CGO_CFLAGS="-target x86_64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     CGO_LDFLAGS="-target x86_64-apple-macos${MIN_MACOS_VERSION} -isysroot $MACOS_SDK" \
     GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
-    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid=" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-amd64.a" .
+    go build -trimpath -buildmode=c-archive -ldflags="-s -w -buildid= -macos=${MIN_MACOS_VERSION}" -tags="$ts_tags" -o "$TRZSZ_SSH_DIR/$FRAMEWORK_NAME-macos-amd64.a" .
 
     log "  Creating universal binary..."
     lipo -create \

@@ -72,25 +72,14 @@ func (t *chanTUN) deliver(pkt []byte) {
 
 func (t *chanTUN) File() *os.File { return nil }
 
-func (t *chanTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
-	var pkt []byte
+func (t *chanTUN) Read(slab []byte, packets []tun.ReadPacket) (int, error) {
 	select {
-	case pkt = <-t.in:
+	case pkt := <-t.in:
+		packets[0].Offset = tun.ReadPacketSpacing
+		packets[0].Size = copy(slab[tun.ReadPacketSpacing:len(slab)-tun.ReadPacketSpacing], pkt)
+		return 1, nil
 	case <-t.closed:
 		return 0, os.ErrClosed
-	}
-	n := 0
-	for {
-		sizes[n] = copy(bufs[n][offset:], pkt)
-		n++
-		if n == len(bufs) {
-			return n, nil
-		}
-		select {
-		case pkt = <-t.in:
-		default:
-			return n, nil
-		}
 	}
 }
 
