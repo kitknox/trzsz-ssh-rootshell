@@ -16,13 +16,13 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "TrzszSSH",
-            url: "https://github.com/kitknox/trzsz-ssh-rootshell/releases/download/v0.2.12/TrzszSSH.xcframework.zip",
-            checksum: "ac0717a06a92b437f4313db601159696dd9620d9fc53644af7de9198396a333f"
+            url: "https://github.com/kitknox/trzsz-ssh-rootshell/releases/download/v0.2.13/TrzszSSH.xcframework.zip",
+            checksum: "8c9840311b34d8a0e6678db5166a969a8c8457f1cffcecd070fd6293a7a6f289"
         ),
         .binaryTarget(
             name: "VPNTunnel",
-            url: "https://github.com/kitknox/trzsz-ssh-rootshell/releases/download/v0.2.12/VPNTunnel.xcframework.zip",
-            checksum: "f78d78e8f3fcac31eff6c3e631b75e057ada2b97164b6945a49c61ebf1880f01"
+            url: "https://github.com/kitknox/trzsz-ssh-rootshell/releases/download/v0.2.13/VPNTunnel.xcframework.zip",
+            checksum: "a51da50c7fbe3f58b01fc31cebe4088175a08be38eca2f49325789cdb33a8506"
         ),
     ]
 )
