@@ -49,7 +49,7 @@ MIN_MACOS_VERSION="15.0"
 
 # Tailscale features kept in the iOS and macOS slices; everything else is
 # compiled out.
-TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock"
+TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock,udptransport,nattraversal"
 
 tailscale_build_tags() {
     tssh_tailscale_build_tags "$TAILSCALE_FEATURES"

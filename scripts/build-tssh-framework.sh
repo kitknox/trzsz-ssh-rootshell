@@ -32,7 +32,7 @@ source "$SCRIPT_DIR/tssh-build-common.sh"
 
 # Tailscale features for the in-app engine (userspace netstack). Exit nodes
 # need useexitnode; the VPN extension leaves them out.
-TSSH_TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock,useexitnode"
+TSSH_TAILSCALE_FEATURES="netstack,dns,useroutes,ipnbus,health,tailnetlock,useexitnode,udptransport,nattraversal"
 
 TRZSZ_SSH_DIR="${TRZSZ_SSH_DIR:-}"
 TSSHD_DIR="${TSSHD_DIR:-}"

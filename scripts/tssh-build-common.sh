@@ -120,6 +120,11 @@ tssh_tailscale_build_tags() {
     tags="$(cd "$TSSH_BUILD_MODULE_DIR" && GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
         go run tailscale.com/cmd/featuretags --min --add="$1")" \
         || tssh_error "could not resolve Tailscale feature tags"
+    # Without these every peer is relayed over DERP.
+    case ",$tags," in
+        *,ts_omit_udptransport,*|*,ts_omit_nattraversal,*)
+            tssh_error "Tailscale feature tags omit direct UDP paths: $tags" ;;
+    esac
     echo "rootshell_tailscale,$tags"
 }
 
