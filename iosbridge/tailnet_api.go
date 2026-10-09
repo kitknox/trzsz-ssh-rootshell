@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/trzsz/tsshd/tsshd"
@@ -57,6 +58,28 @@ type TailnetStateStore interface {
 // login state changes.
 type TailnetCallback interface {
 	OnTailnetState(statusJSON string)
+}
+
+// TailnetLogger receives the in-app engine's log lines.
+type TailnetLogger interface {
+	OnTailnetLog(line string)
+}
+
+var tailnetLogger atomic.Pointer[TailnetLogger]
+
+// TailnetSetLogger sets (or, with nil, clears) where the engine logs.
+func TailnetSetLogger(l TailnetLogger) {
+	if l == nil {
+		tailnetLogger.Store(nil)
+		return
+	}
+	tailnetLogger.Store(&l)
+}
+
+func tailnetLogf(format string, a ...any) {
+	if l := tailnetLogger.Load(); l != nil {
+		(*l).OnTailnetLog(fmt.Sprintf(format, a...))
+	}
 }
 
 // tailnetConfig is TailnetStart's JSON.
@@ -352,6 +375,10 @@ func useTailnetForTransport(opts *tsshd.UdpClientOptions, host string) {
 func TailnetDefaultInterfaceChanged(name string) {
 	tailnetDefaultInterfaceChanged(name)
 }
+
+// TailnetResetStuck is TailnetResetSockets' error message when the reset never
+// finished: the engine is wedged and needs a restart.
+const TailnetResetStuck = "tailscale socket reset is stuck"
 
 // TailnetResetSockets restarts the engine's UDP sockets. Call it when the app
 // returns from the background: iOS may have reclaimed them while suspended,

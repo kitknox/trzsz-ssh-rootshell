@@ -28,21 +28,35 @@ package tsengine
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 
 	"tailscale.com/tsd"
+	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
 )
 
-// Fails when a Tailscale bump renames or retypes userspaceEngine.wgdev.
-func TestWireguardDevice(t *testing.T) {
+func newFakeEngine(t *testing.T, logf logger.Logf) (*Engine, wgengine.Engine) {
 	sys := tsd.NewSystem()
-	eng, err := wgengine.NewFakeUserspaceEngine(t.Logf, 0, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get(), sys.Set)
+	eng, err := wgengine.NewFakeUserspaceEngine(logf, 0, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get(), sys.Set)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng.Close()
-	e := &Engine{ctx: context.Background(), logf: t.Logf, wg: eng, magic: sys.MagicSock.Get()}
+	t.Cleanup(eng.Close)
+	return &Engine{ctx: context.Background(), logf: logf, wg: eng, magic: sys.MagicSock.Get()}, eng
+}
+
+// Fails when a Tailscale bump renames or retypes userspaceEngine.wgdev or
+// magicsock.Conn's sockets.
+func TestWireguardDevice(t *testing.T) {
+	e, eng := newFakeEngine(t, t.Logf)
+	v := reflect.ValueOf(e.magic).Elem()
+	for _, name := range []string{"pconn4", "pconn6"} {
+		if rebindingConn(v, name) == nil {
+			t.Fatalf("magicsock.Conn has no %s socket", name)
+		}
+	}
 	for range 2 {
 		if err := e.ResetSockets(); err != nil {
 			t.Fatal(err)
@@ -54,5 +68,36 @@ func TestWireguardDevice(t *testing.T) {
 	}
 	if dev.Bind() == nil {
 		t.Fatal("device has no bind after reset")
+	}
+}
+
+// A magicsock rebind racing the reset used to leave WireGuard's Down waiting
+// on a receive loop forever.
+func TestResetSocketsConcurrentRebind(t *testing.T) {
+	e, _ := newFakeEngine(t, func(string, ...any) {})
+	for i := range 60 {
+		done := make(chan error, 1)
+		go func() { done <- e.ResetSockets() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("reset %d: %v", i, err)
+			}
+		case <-time.After(2 * stuckTimeout):
+			t.Fatalf("reset %d never returned", i)
+		}
+		if i%3 == 0 {
+			go e.magic.Rebind()
+		}
+	}
+}
+
+func TestResetSocketsAfterClose(t *testing.T) {
+	e, _ := newFakeEngine(t, t.Logf)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.ctx = ctx
+	if err := e.ResetSockets(); err != nil {
+		t.Fatal(err)
 	}
 }

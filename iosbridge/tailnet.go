@@ -29,6 +29,7 @@ package iosbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -64,7 +65,13 @@ func tailnetResetSockets() error {
 	if !ok {
 		return nil
 	}
-	return b.core.ResetSockets()
+	if err := b.core.ResetSockets(); err != nil {
+		if errors.Is(err, tsengine.ErrResetStuck) {
+			return errors.New(TailnetResetStuck)
+		}
+		return err
+	}
+	return nil
 }
 
 type inAppTailnet struct {
@@ -92,13 +99,8 @@ func toEnginePrefs(p tailnetPrefs) tsengine.Prefs {
 func startTailnetBackend(conf tailnetConfig, store TailnetStateStore, cb TailnetCallback) (tailnetBackend, error) {
 	t := &inAppTailnet{cb: cb, kick: make(chan struct{}, 1)}
 	t.ctx, t.stop = context.WithCancel(context.Background())
-	logf := func(format string, a ...any) {
-		if dl := getDebugLogger(); dl != nil {
-			dl.OnDebug("[tailscale] " + fmt.Sprintf(format, a...))
-		}
-	}
 	core, err := tsengine.Start(tsengine.Config{
-		Logf:     logf,
+		Logf:     tailnetLogf,
 		Prefs:    toEnginePrefs(conf.tailnetPrefs),
 		StateDir: conf.StateDir,
 		Store:    store,

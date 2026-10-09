@@ -115,6 +115,7 @@ type Engine struct {
 	logf     logger.Logf
 	wg       wgengine.Engine
 	magic    *magicsock.Conn
+	resetMu  sync.Mutex
 
 	mu        sync.Mutex
 	state     ipn.State
@@ -480,12 +481,16 @@ func (e *Engine) Ping(ctx context.Context, ip netip.Addr) (*ipnstate.PingResult,
 	return e.LB.Ping(ctx, ip, tailcfg.PingDisco, 0)
 }
 
-// Close shuts the backend down; it is safe to call more than once.
+// Close shuts the backend down; it is safe to call more than once. It gives
+// up after stuckTimeout, leaving a wedged shutdown running, so a new engine
+// can start.
 func (e *Engine) Close() {
 	e.closeOnce.Do(func() {
-		for i := len(e.closers) - 1; i >= 0; i-- {
-			e.closers[i]()
-		}
+		e.await("close", true, func() {
+			for i := len(e.closers) - 1; i >= 0; i-- {
+				e.closers[i]()
+			}
+		})
 	})
 }
 
