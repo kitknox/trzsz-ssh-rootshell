@@ -7,7 +7,7 @@
 # Only the iOS, iOS Simulator and native macOS slices include the Tailscale engine.
 #
 # Prerequisites:
-#   - Go 1.27.1 (fetched through GOTOOLCHAIN when the host go is older)
+#   - Go 1.27.2 (fetched through GOTOOLCHAIN when the host go is older)
 #   - Xcode command line tools
 #
 # Usage:

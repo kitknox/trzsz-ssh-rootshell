@@ -3,7 +3,7 @@
 # Shared, reproducible toolchain and dependency handling for the Go Mobile
 # frameworks used by the tssh and VPN integrations.
 
-TSSH_GO_TOOLCHAIN_VERSION="${TSSH_GO_TOOLCHAIN_VERSION:-go1.27.1}"
+TSSH_GO_TOOLCHAIN_VERSION="${TSSH_GO_TOOLCHAIN_VERSION:-go1.27.2}"
 TSSH_GOMOBILE_VERSION="${TSSH_GOMOBILE_VERSION:-v0.0.0-20260204172633-1dceadbbeea3}"
 TSSH_GOBIND_VERSION="${TSSH_GOBIND_VERSION:-v0.0.0-20260211191516-dcd2a3258864}"
 # Generated modules intentionally follow the source module's gomobile revision.

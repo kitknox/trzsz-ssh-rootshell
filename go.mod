@@ -1,6 +1,6 @@
 module github.com/trzsz/trzsz-ssh
 
-go 1.27.1
+go 1.27.2
 
 require (
 	charm.land/bubbles/v2 v2.1.0
@@ -32,7 +32,7 @@ require (
 	github.com/trzsz/tsshd v0.1.9-0.20260620235652-7713cd6be7b1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
 	tailscale.com v1.104.1
