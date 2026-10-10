@@ -125,6 +125,7 @@ check_prerequisites() {
     log "Checking prerequisites..."
     tssh_setup_toolchain "$PROJECT_DIR"
     tssh_prepare_build_module "$PROJECT_DIR" "$TRZSZ_SSH_DIR" trzsz-ssh
+    tssh_use_app_tailscale "$SCRIPT_DIR/_app-tailscale/mem_ios.go"
 
     log "  Go version: $(go env GOVERSION)"
     log "  gomobile: $GOMOBILE"

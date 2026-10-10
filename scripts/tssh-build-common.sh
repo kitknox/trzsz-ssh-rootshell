@@ -128,6 +128,26 @@ tssh_tailscale_build_tags() {
     echo "rootshell_tailscale,$tags"
 }
 
+# The app's framework builds against a copy of tailscale.com with the app's
+# WireGuard memory options (scripts/_app-tailscale/mem_ios.go): the network
+# extension's buffer ceiling deadlocks the in-app engine after a suspend. The
+# copy lives in the disposable build module; call after tssh_prepare_build_module.
+tssh_use_app_tailscale() {
+    local replacement="$1"
+    local ts_dir
+    ts_dir="$(cd "$TSSH_BUILD_MODULE_DIR" && GOWORK="$TSSH_GOWORK" GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
+        go mod download -json tailscale.com | sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')"
+    local target="wgengine/wgcfg/mem_ios.go"
+    [[ -n "$ts_dir" && -f "$ts_dir/$target" ]] || tssh_error "Tailscale's iOS memory options moved: $ts_dir/$target"
+    local copy="$TSSH_BUILD_MODULE_DIR/.app-tailscale"
+    cp -R "$ts_dir" "$copy"
+    # Module cache files are read-only; the next build's cleanup must delete them.
+    chmod -R u+w "$copy"
+    cp "$replacement" "$copy/$target"
+    (cd "$TSSH_BUILD_MODULE_DIR" && GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" \
+        go mod edit -replace="tailscale.com=$copy")
+}
+
 tssh_write_generated_module() {
     local generated_dir="$1"
     local module_path="$2"
@@ -150,6 +170,9 @@ EOF
     # The in-app Tailscale engine lives in the nested vpntunnel module.
     if [[ "$module_path" == "github.com/trzsz/trzsz-ssh" ]]; then
         printf "replace github.com/trzsz/trzsz-ssh/vpntunnel => %s/vpntunnel\n" "$module_source" >> "$generated_dir/go.mod"
+        if [[ -d "$module_source/.app-tailscale" ]]; then
+            printf "replace tailscale.com => %s/.app-tailscale\n" "$module_source" >> "$generated_dir/go.mod"
+        fi
     fi
 
     if [[ "${DEPENDENCY_MODE:-local}" == "local" ]]; then
