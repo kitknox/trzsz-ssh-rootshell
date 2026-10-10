@@ -248,10 +248,11 @@ func Start(conf Config) (_ *Engine, reterr error) {
 		return nil, fmt.Errorf("local backend: %w", err)
 	}
 	e.LB = lb
-	// tsnet's order: netstack, then the backend.
+	// Backend first, unlike tsnet: its TUN close frees netstack writes stuck
+	// behind a wedged WireGuard, which netstack's close would wait on.
 	e.closers = append(e.closers, func() {
-		closeNetstack()
 		lb.Shutdown()
+		closeNetstack()
 	})
 	lb.SetVarRoot(dir)
 	if err := ns.Start(lb); err != nil {

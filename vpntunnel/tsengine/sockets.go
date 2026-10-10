@@ -51,7 +51,8 @@ const (
 // ResetSockets replaces the UDP sockets under WireGuard and restarts its
 // receive loops. iOS reclaims a suspended app's sockets; the loops exit on
 // the read error and Tailscale never restarts them, leaving peers on DERP.
-// Netstack connections survive; peers just handshake again.
+// Only the bind restarts: Down/Up would also stop every peer and drop its
+// session, staging all traffic behind fresh handshakes.
 func (e *Engine) ResetSockets() error {
 	if !e.resetMu.TryLock() {
 		e.logf("socket reset already running")
@@ -66,22 +67,22 @@ func (e *Engine) ResetSockets() error {
 		return err
 	}
 	start := time.Now()
-	// Down closes the bind; Rebind opens fresh sockets before Up starts
-	// receive loops on them (Up alone would read the closed ones).
-	if !e.await("wireguard down", true, func() {
-		if err := dev.Down(); err != nil {
-			e.logf("wireguard down: %v", err)
+	// Rebind opens fresh sockets between the close and the update, which
+	// starts receive loops on them (an update alone would read the old ones).
+	if !e.await("bind close", true, func() {
+		if err := dev.BindClose(); err != nil {
+			e.logf("bind close: %v", err)
 		}
 	}) {
 		return ErrResetStuck
 	}
 	e.magic.Rebind()
-	var upErr error
-	if !e.await("wireguard up", false, func() { upErr = dev.Up() }) {
+	var openErr error
+	if !e.await("bind open", false, func() { openErr = dev.BindUpdate() }) {
 		return ErrResetStuck
 	}
-	if upErr != nil {
-		return fmt.Errorf("wireguard up: %w", upErr)
+	if openErr != nil {
+		return fmt.Errorf("bind open: %w", openErr)
 	}
 	e.magic.ReSTUN("rootshell-foreground")
 	e.logf("reset sockets in %v", time.Since(start).Round(time.Millisecond))
@@ -89,10 +90,15 @@ func (e *Engine) ResetSockets() error {
 }
 
 // await runs fn and reports whether it returned in time. With unstick it
-// keeps closing magicsock's sockets meanwhile: WireGuard's bind close waits
-// for its receive loops, and a magicsock rebind racing it (link change, send
-// error) hands them a live socket, so the wait never ends.
+// keeps freeing WireGuard's receive loops meanwhile, since its bind close
+// waits for them. A magicsock rebind racing it (link change, send error)
+// hands them a live socket; packets staged for peers without a session can
+// hold the whole buffer pool (64 on iOS) they need to see the close.
 func (e *Engine) await(what string, unstick bool, fn func()) bool {
+	var peers []device.NoisePublicKey
+	if unstick {
+		peers = e.peerKeys()
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -111,10 +117,11 @@ func (e *Engine) await(what string, unstick bool, fn func()) bool {
 				continue
 			}
 			if !unstuck {
-				e.logf("%s is waiting on a receive loop; closing sockets", what)
+				e.logf("%s is waiting on a receive loop; closing sockets, dropping staged packets", what)
 				unstuck = true
 			}
 			e.closeMagicSockets()
+			e.flushStaged(peers)
 		case <-deadline:
 			e.logf("%s stuck after %v", what, stuckTimeout)
 			e.dumpGoroutines()
@@ -133,6 +140,39 @@ func (e *Engine) closeMagicSockets() {
 	for _, name := range []string{"pconn4", "pconn6"} {
 		if c := rebindingConn(v, name); c != nil {
 			c.Close()
+		}
+	}
+}
+
+// peerKeys lists the netmap's peers, read before a close takes the netmap away.
+func (e *Engine) peerKeys() []device.NoisePublicKey {
+	if e.LB == nil {
+		return nil
+	}
+	nm := e.LB.NetMap()
+	if nm == nil {
+		return nil
+	}
+	keys := make([]device.NoisePublicKey, 0, len(nm.Peers))
+	for _, p := range nm.Peers {
+		keys = append(keys, device.NoisePublicKey(p.Key().Raw32()))
+	}
+	return keys
+}
+
+// flushStaged drops packets waiting on a handshake, which returns their
+// buffers to WireGuard's pool. Peers handshake again when traffic resumes.
+func (e *Engine) flushStaged(peers []device.NoisePublicKey) {
+	if len(peers) == 0 {
+		return
+	}
+	dev, err := wireguardDevice(e.wg)
+	if err != nil {
+		return
+	}
+	for _, k := range peers {
+		if p, ok := dev.LookupActivePeer(k); ok {
+			p.FlushStagedPackets()
 		}
 	}
 }
