@@ -208,8 +208,8 @@ github.com/kamstrup/intmap v0.5.2 h1:qnwBm1mh4XAnW9W9Ue9tZtTff8pS6+s6iKF6JRIV2Dk
 github.com/kamstrup/intmap v0.5.2/go.mod h1:gWUVWHKzWj8xpJVFf5GC0O26bWmv3GqdnIX/LMT6Aq4=
 github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb h1:0Jm3TXRLXLpcuuZ9Y0q2PvnFkvZk3QajcIxX4zMBf9E=
 github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb/go.mod h1:/SVDPW+ZSVgcauuSjY+tR5zTzhVQxvboNt5WdFIIwPk=
-github.com/kitknox/tsshd-rootshell v0.0.0-20261006214131-99ca85e32834 h1:Jx7HzF6BHwkxC5W0PjDSVCl5bSdaNl75vZW+8ODRXK0=
-github.com/kitknox/tsshd-rootshell v0.0.0-20261006214131-99ca85e32834/go.mod h1:/MjCH8UCxICmfSvxPMBCJ2d5GrOrboLShpy62Vc5WEU=
+github.com/kitknox/tsshd-rootshell v0.0.0-20261018183813-43de228aadc8 h1:/yOEEOpCCvMjMZAI7SvUArLSQo9tTYUIXrRIIirCP+Q=
+github.com/kitknox/tsshd-rootshell v0.0.0-20261018183813-43de228aadc8/go.mod h1:/MjCH8UCxICmfSvxPMBCJ2d5GrOrboLShpy62Vc5WEU=
 github.com/klauspost/compress v1.20.0 h1:a3C1ke2ohxFymNlb2HWAHjDeKCI90scRskErZkR0ezA=
 github.com/klauspost/compress v1.20.0/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=

@@ -115,7 +115,7 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
 )
 
-replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261006214131-99ca85e32834
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261018183813-43de228aadc8
 
 replace github.com/trzsz/kcp-go/v5 => github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb
 

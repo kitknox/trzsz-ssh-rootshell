@@ -68,6 +68,36 @@ func getDebugLogger() DebugLogger {
 	return globalDebugLogger.logger
 }
 
+// ROOTSHELL: ReconnectPauser lets the host app hold tsshd reconnect attempts, e.g. while
+// macOS is in Dark Wake, so a sleeping Mac does not reconnect and resize a shared tmux window.
+type ReconnectPauser interface {
+	// PauseReason returns a non-empty reason to pause. Called from background goroutines.
+	PauseReason() string
+}
+
+var globalReconnectPauser struct {
+	sync.RWMutex
+	pauser ReconnectPauser
+}
+
+// SetReconnectPauser sets a global reconnect pauser for all transports. Pass nil to disable.
+func SetReconnectPauser(pauser ReconnectPauser) {
+	globalReconnectPauser.Lock()
+	defer globalReconnectPauser.Unlock()
+	globalReconnectPauser.pauser = pauser
+}
+
+func shouldPauseReconnect() (bool, string) {
+	globalReconnectPauser.RLock()
+	pauser := globalReconnectPauser.pauser
+	globalReconnectPauser.RUnlock()
+	if pauser == nil {
+		return false, ""
+	}
+	reason := pauser.PauseReason()
+	return reason != "", reason
+}
+
 // TransportConfig holds connection parameters for the UDP transport.
 // These values come from the tsshd JSON output after SSH spawn.
 //
@@ -476,6 +506,7 @@ func connectTransport(config *TransportConfig, proxy *Transport) (*Transport, er
 			}
 		},
 	}
+	opts.ShouldPauseReconnect = shouldPauseReconnect
 	if proxy == nil {
 		useTailnetForTransport(opts, config.Host)
 	}
