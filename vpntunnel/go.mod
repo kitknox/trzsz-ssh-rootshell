@@ -1,6 +1,6 @@
 module github.com/trzsz/trzsz-ssh/vpntunnel
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226

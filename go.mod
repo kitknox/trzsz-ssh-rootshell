@@ -1,6 +1,6 @@
 module github.com/trzsz/trzsz-ssh
 
-go 1.27.2
+go 1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.1.0
