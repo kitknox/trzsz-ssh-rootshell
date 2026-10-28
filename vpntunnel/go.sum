@@ -141,8 +141,8 @@ github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb h1:0Jm
 github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb/go.mod h1:/SVDPW+ZSVgcauuSjY+tR5zTzhVQxvboNt5WdFIIwPk=
 github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a h1:/t8gREGReh/3S86IVtAofFw8z/uR3oKX/l4bvU0JH1U=
 github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a/go.mod h1:gHBCmzoWTcvQCHC8Cnq7PQaeOLF61sXlYMrEOlBKq48=
-github.com/klauspost/compress v1.20.0 h1:a3C1ke2ohxFymNlb2HWAHjDeKCI90scRskErZkR0ezA=
-github.com/klauspost/compress v1.20.0/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
+github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
+github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
 github.com/klauspost/reedsolomon v1.14.1 h1:swE9kzyWXD/wVG+l5Pe8bWnQ0giIY7D1GjCBKk3kG2U=
