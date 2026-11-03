@@ -44,7 +44,7 @@ done
 if [[ "$PUBLISH" == true ]]; then
     command -v gh >/dev/null || { echo "ERROR: required command not found: gh" >&2; exit 1; }
     gh auth status >/dev/null
-    for repository in "$REPOSITORY" kitknox/tsshd-rootshell kitknox/kcp-go-rootshell; do
+    for repository in "$REPOSITORY" kitknox/tsshd-rootshell; do
         visibility="$(gh repo view "$repository" --json visibility --jq .visibility)"
         [[ "$visibility" == "PUBLIC" ]] || { echo "ERROR: $repository must be public before publishing" >&2; exit 1; }
     done
@@ -64,7 +64,6 @@ if [[ "$SKIP_BUILD" == false ]]; then
         BUILD_ARGS+=(
             --dependency-mode local
             --tsshd-source "$PACKAGE_DIR/../tsshd"
-            --kcp-source "$PACKAGE_DIR/../trzsz-kcp-go"
         )
         "$PACKAGE_DIR/scripts/build-trzsz-package.sh" "${BUILD_ARGS[@]}"
     fi
@@ -146,14 +145,12 @@ BRANCH="$(git -C "$PACKAGE_DIR" branch --show-current)"
 [[ -n "$BRANCH" ]] || { echo "ERROR: publish from a branch, not detached HEAD" >&2; exit 1; }
 TRZSZ_REVISION="$(git -C "$PACKAGE_DIR" rev-parse HEAD)"
 TSSHD_REPLACEMENT="$(awk '$1 == "replace" && $2 == "github.com/trzsz/tsshd" { print $(NF-1), $NF }' "$PACKAGE_DIR/go.mod")"
-KCP_REPLACEMENT="$(awk '$1 == "replace" && $2 == "github.com/trzsz/kcp-go/v5" { print $(NF-1), $NF }' "$PACKAGE_DIR/go.mod")"
 
 cat > "$STAGE/release-notes.md" <<EOF
 Apple binary package built from:
 
 - trzsz-ssh: $TRZSZ_REVISION
 - tsshd replacement: $TSSHD_REPLACEMENT
-- kcp-go replacement: $KCP_REPLACEMENT
 
 Build provenance is attached as \`provenance.json\`.
 EOF

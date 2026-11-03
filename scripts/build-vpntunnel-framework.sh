@@ -16,7 +16,6 @@
 # Options:
 #   --trzsz-source PATH  trzsz-ssh checkout
 #   --tsshd-source PATH  tsshd checkout (local dependency mode)
-#   --kcp-source PATH    kcp-go checkout (local dependency mode)
 #   --dependency-mode MODE  local or remote (default: local)
 #   --output-dir PATH    framework destination
 #   --verbose   Show detailed build output
@@ -32,7 +31,6 @@ source "$SCRIPT_DIR/tssh-build-common.sh"
 
 TRZSZ_SSH_DIR="${TRZSZ_SSH_DIR:-}"
 TSSHD_DIR="${TSSHD_DIR:-}"
-KCP_GO_DIR="${KCP_GO_DIR:-}"
 DEPENDENCY_MODE="${DEPENDENCY_MODE:-local}"
 VPNTUNNEL_DIR="$TRZSZ_SSH_DIR/vpntunnel"
 FRAMEWORK_NAME="VPNTunnel"
@@ -60,7 +58,7 @@ VERBOSE=false
 CLEAN=false
 
 usage() {
-    echo "Usage: $0 [--trzsz-source <path>] [--tsshd-source <path>] [--kcp-source <path>]"
+    echo "Usage: $0 [--trzsz-source <path>] [--tsshd-source <path>]"
     echo "          [--dependency-mode local|remote] [--output-dir <path>]"
     echo "          [--clean] [--verbose]"
 }
@@ -73,10 +71,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tsshd-source)
             TSSHD_DIR="${2:-}"
-            shift 2
-            ;;
-        --kcp-source)
-            KCP_GO_DIR="${2:-}"
             shift 2
             ;;
         --dependency-mode)
@@ -146,7 +140,6 @@ check_prerequisites() {
     log "  dependencies: $DEPENDENCY_MODE"
     if [[ "$DEPENDENCY_MODE" == "local" ]]; then
         log "  tsshd: $TSSHD_DIR"
-        log "  kcp-go: $KCP_GO_DIR"
     fi
 
     if [[ ! -f "$VPNTUNNEL_DIR/bridge.go" ]]; then

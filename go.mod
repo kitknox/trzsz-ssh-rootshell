@@ -120,5 +120,3 @@ require (
 replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742
 
 replace github.com/trzsz/trzsz-ssh/vpntunnel => ./vpntunnel
-
-replace github.com/trzsz/kcp-go/v5 => github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb

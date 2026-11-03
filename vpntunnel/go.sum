@@ -141,8 +141,6 @@ github.com/jsimonetti/rtnetlink v1.4.2 h1:Df9w9TZ3npHTyDn0Ev9e1uzmN2odmXd0QX+J5G
 github.com/jsimonetti/rtnetlink v1.4.2/go.mod h1:92s6LJdE+1iOrw+F2/RO7LYI2Qd8pPpFNNUYW06gcoM=
 github.com/kamstrup/intmap v0.5.2 h1:qnwBm1mh4XAnW9W9Ue9tZtTff8pS6+s6iKF6JRIV2Dk=
 github.com/kamstrup/intmap v0.5.2/go.mod h1:gWUVWHKzWj8xpJVFf5GC0O26bWmv3GqdnIX/LMT6Aq4=
-github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb h1:0Jm3TXRLXLpcuuZ9Y0q2PvnFkvZk3QajcIxX4zMBf9E=
-github.com/kitknox/kcp-go-rootshell/v5 v5.0.0-20260718202214-2a3b09b878fb/go.mod h1:/SVDPW+ZSVgcauuSjY+tR5zTzhVQxvboNt5WdFIIwPk=
 github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742 h1:prr9nMHYcfngmTlWaGEhErLcG91rdY8An4EDTK2c/ZI=
 github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742/go.mod h1:FCQkf9l3A4yA3R0SDW2leL9eAuTEasSlJfb68lU48BM=
 github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
@@ -218,6 +216,8 @@ github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e h1:zOGKqN5D5hHhiYUp
 github.com/tailscale/xnet v0.0.0-20240729143630-8497ac4dab2e/go.mod h1:orPd6JZXXRyuDusYilywte7k094d7dycXXU5YnWsrwg=
 github.com/tjfoc/gmsm v1.4.1 h1:aMe1GlZb+0bLjn+cKTPEvvn9oUEBlJitaZiiBwsbgho=
 github.com/tjfoc/gmsm v1.4.1/go.mod h1:j4INPkHWMrhJb38G+J6W4Tw0AbuN8Thu3PbdVYhVcTE=
+github.com/trzsz/kcp-go/v5 v5.6.73 h1:6K40hRq/1Rakn2roAsNod/IPno7/Xfwj6bCyH/rGqwQ=
+github.com/trzsz/kcp-go/v5 v5.6.73/go.mod h1:/SVDPW+ZSVgcauuSjY+tR5zTzhVQxvboNt5WdFIIwPk=
 github.com/trzsz/quic-go v0.63.0 h1:RNPFkH4q7HasXimEglrnkpo4s9QFJI7dAWrcIxqRnv4=
 github.com/trzsz/quic-go v0.63.0/go.mod h1:Q6g/fBQKpAK4dzT66sjqXoJP5au2i5O8GK0EnJLxRpc=
 github.com/trzsz/shellescape v1.6.0 h1:Xtbjtc1X5xnQHQnzXvmJj+X0I3t7iPMOyeylKitzj+8=

@@ -25,18 +25,13 @@ tssh_resolve_sources() {
     if [[ -z "${TSSHD_DIR:-}" && -f "$project_dir/../tsshd/go.mod" ]]; then
         TSSHD_DIR="$project_dir/../tsshd"
     fi
-    if [[ -z "${KCP_GO_DIR:-}" && -f "$project_dir/../trzsz-kcp-go/go.mod" ]]; then
-        KCP_GO_DIR="$project_dir/../trzsz-kcp-go"
-    fi
 
     [[ -n "${TRZSZ_SSH_DIR:-}" ]] || tssh_error "trzsz-ssh source was not found; pass --trzsz-source or set TRZSZ_SSH_DIR"
     TRZSZ_SSH_DIR="$(cd "$TRZSZ_SSH_DIR" 2>/dev/null && pwd)" || tssh_error "invalid trzsz-ssh source: $TRZSZ_SSH_DIR"
 
     if [[ "${DEPENDENCY_MODE:-local}" == "local" ]]; then
         [[ -n "${TSSHD_DIR:-}" ]] || tssh_error "tsshd source was not found; pass --tsshd-source or set TSSHD_DIR"
-        [[ -n "${KCP_GO_DIR:-}" ]] || tssh_error "KCP source was not found; pass --kcp-source or set KCP_GO_DIR"
         TSSHD_DIR="$(cd "$TSSHD_DIR" 2>/dev/null && pwd)" || tssh_error "invalid tsshd source: $TSSHD_DIR"
-        KCP_GO_DIR="$(cd "$KCP_GO_DIR" 2>/dev/null && pwd)" || tssh_error "invalid KCP source: $KCP_GO_DIR"
     fi
 }
 
@@ -105,8 +100,7 @@ tssh_prepare_build_module() {
         (
             cd "$TSSH_BUILD_MODULE_DIR"
             GOWORK=off GOTOOLCHAIN="$TSSH_GO_TOOLCHAIN_VERSION" go mod edit \
-                -replace="github.com/trzsz/tsshd=$TSSHD_DIR" \
-                -replace="github.com/trzsz/kcp-go/v5=$KCP_GO_DIR"
+                -replace="github.com/trzsz/tsshd=$TSSHD_DIR"
         )
     fi
     TSSH_GOWORK=off
@@ -177,12 +171,10 @@ EOF
 
     if [[ "${DEPENDENCY_MODE:-local}" == "local" ]]; then
         printf 'replace github.com/trzsz/tsshd => %s\n' "$TSSHD_DIR" >> "$generated_dir/go.mod"
-        printf 'replace github.com/trzsz/kcp-go/v5 => %s\n' "$KCP_GO_DIR" >> "$generated_dir/go.mod"
     else
         local replacements
-        replacements="$(awk '$1 == "replace" && ($2 == "github.com/trzsz/tsshd" || $2 == "github.com/trzsz/kcp-go/v5") { print }' "$source_mod")"
+        replacements="$(awk '$1 == "replace" && $2 == "github.com/trzsz/tsshd" { print }' "$source_mod")"
         [[ "$replacements" == *"github.com/trzsz/tsshd"* ]] || tssh_error "missing public tsshd replacement in $source_mod"
-        [[ "$replacements" == *"github.com/trzsz/kcp-go/v5"* ]] || tssh_error "missing public KCP replacement in $source_mod"
         printf '%s\n' "$replacements" >> "$generated_dir/go.mod"
     fi
 

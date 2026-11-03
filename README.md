@@ -23,8 +23,8 @@ it to an exact release version. Link the products needed by each target.
 
 ### Maintainer release workflow
 
-The frameworks are built together from one reviewed trzsz/tsshd/KCP source
-set. From a sibling `rootshell` checkout, publish a release with:
+The frameworks are built together from one reviewed trzsz/tsshd source set.
+From a sibling `rootshell` checkout, publish a release with:
 
 ```bash
 ./scripts/release-swift-package.sh <version> \
