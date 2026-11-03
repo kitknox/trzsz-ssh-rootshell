@@ -35,7 +35,7 @@ require (
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
-	tailscale.com v1.104.4
+	tailscale.com v1.104.5
 )
 
 require (

@@ -8,7 +8,7 @@ require (
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
 	golang.org/x/net v0.60.0
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
-	tailscale.com v1.104.4
+	tailscale.com v1.104.5
 )
 
 replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20260719233000-1995533cdb5a
