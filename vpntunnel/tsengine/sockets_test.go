@@ -32,9 +32,14 @@ import (
 	"testing"
 	"time"
 
+	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/waiter"
+	"tailscale.com/net/tsdial"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/wgengine"
+	"tailscale.com/wgengine/netstack"
 )
 
 func newFakeEngine(t *testing.T, logf logger.Logf) (*Engine, wgengine.Engine) {
@@ -99,5 +104,36 @@ func TestResetSocketsAfterClose(t *testing.T) {
 	e.ctx = ctx
 	if err := e.ResetSockets(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Fails when a Tailscale bump renames or retypes netstack.Impl.ipstack.
+func TestUDPReceiveBuffer(t *testing.T) {
+	sys := tsd.NewSystem()
+	eng, err := wgengine.NewFakeUserspaceEngine(t.Logf, 0, sys.HealthTracker.Get(), sys.UserMetricsRegistry(), sys.Bus.Get(), sys.Set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(eng.Close)
+	sys.Set(eng)
+	ns, err := netstack.Create(t.Logf, sys.Tun.Get(), eng, sys.MagicSock.Get(), &tsdial.Dialer{Logf: t.Logf}, sys.DNSManager.Get(), sys.ProxyMapper())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ns.Close() })
+	if err := setUDPReceiveBuffer(ns, udpReceiveBuffer); err != nil {
+		t.Fatal(err)
+	}
+	s, err := netstackStack(ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep, tcpErr := s.NewEndpoint(udp.ProtocolNumber, ipv4.ProtocolNumber, &waiter.Queue{})
+	if tcpErr != nil {
+		t.Fatal(tcpErr)
+	}
+	defer ep.Close()
+	if got := ep.SocketOptions().GetReceiveBufferSize(); got != udpReceiveBuffer {
+		t.Fatalf("udp receive buffer = %d, want %d", got, udpReceiveBuffer)
 	}
 }

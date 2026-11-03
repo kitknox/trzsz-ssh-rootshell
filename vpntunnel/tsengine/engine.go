@@ -215,6 +215,9 @@ func Start(conf Config) (_ *Engine, reterr error) {
 	e.Netstack = ns
 	e.DNSManager = sys.DNSManager.Get()
 	if e.Userspace {
+		if err := setUDPReceiveBuffer(ns, udpReceiveBuffer); err != nil {
+			logf("netstack udp buffer: %v", err)
+		}
 		ns.ProcessLocalIPs = true
 		ns.ProcessSubnets = true
 		dialer.UseNetstackForIP = func(ip netip.Addr) bool {

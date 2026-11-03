@@ -35,9 +35,16 @@ import (
 	"unsafe"
 
 	"github.com/tailscale/wireguard-go/device"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"tailscale.com/wgengine"
 	"tailscale.com/wgengine/magicsock"
+	"tailscale.com/wgengine/netstack"
 )
+
+// udpReceiveBuffer holds a full tsshd KCP window (1024 packets). gVisor's
+// 212 KiB default drops bursts tsshd's 1 MiB OS socket would have held.
+const udpReceiveBuffer = 2 << 20
 
 // ErrResetStuck means a socket reset didn't finish; the engine may be wedged.
 var ErrResetStuck = errors.New("tailscale socket reset is stuck")
@@ -191,6 +198,34 @@ func (e *Engine) dumpGoroutines() {
 	buf := make([]byte, maxStackDumpSz)
 	n := runtime.Stack(buf, true)
 	e.logf("goroutines:\n%s", buf[:n])
+}
+
+// setUDPReceiveBuffer sets the default receive buffer of netstack UDP
+// endpoints created from now on; Tailscale leaves gVisor's default.
+func setUDPReceiveBuffer(ns *netstack.Impl, size int) error {
+	s, err := netstackStack(ns)
+	if err != nil {
+		return err
+	}
+	opt := tcpip.ReceiveBufferSizeOption{Min: stack.MinBufferSize, Default: size, Max: max(size, stack.DefaultMaxBufferSize)}
+	if err := s.SetOption(opt); err != nil {
+		return fmt.Errorf("set receive buffer: %v", err)
+	}
+	return nil
+}
+
+// netstackStack reaches netstack's unexported gVisor stack.
+// TestUDPReceiveBuffer catches a rename.
+func netstackStack(ns *netstack.Impl) (*stack.Stack, error) {
+	f := reflect.ValueOf(ns).Elem().FieldByName("ipstack")
+	if !f.IsValid() || f.Type() != reflect.TypeFor[*stack.Stack]() {
+		return nil, fmt.Errorf("%T has no ipstack field", ns)
+	}
+	s := *(**stack.Stack)(unsafe.Pointer(f.UnsafeAddr()))
+	if s == nil {
+		return nil, errors.New("netstack has no stack")
+	}
+	return s, nil
 }
 
 // wireguardDevice reaches wgengine's unexported device: Tailscale has no
