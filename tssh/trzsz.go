@@ -41,10 +41,10 @@ func setupTrzszFilter(sshConn *sshConnection) error {
 	}
 
 	args := sshConn.param.args
-	disableTrzsz := strings.ToLower(getExOptionConfig(args, "EnableTrzsz")) == "no"
-	enableZmodem := args.Zmodem || strings.ToLower(getExOptionConfig(args, "EnableZmodem")) == "yes"
-	enableDragFile := args.DragFile || strings.ToLower(getExOptionConfig(args, "EnableDragFile")) == "yes"
-	enableOSC52 := strings.ToLower(getExOptionConfig(args, "EnableOSC52")) == "yes"
+	disableTrzsz := strings.EqualFold(getExOptionConfig(args, "EnableTrzsz"), "no")
+	enableZmodem := args.Zmodem || strings.EqualFold(getExOptionConfig(args, "EnableZmodem"), "yes")
+	enableDragFile := args.DragFile || strings.EqualFold(getExOptionConfig(args, "EnableDragFile"), "yes")
+	enableOSC52 := strings.EqualFold(getExOptionConfig(args, "EnableOSC52"), "yes")
 
 	// disable trzsz ( trz / tsz )
 	if disableTrzsz && !enableZmodem && !enableDragFile && !enableOSC52 {
@@ -96,6 +96,12 @@ func setupTrzszFilter(sshConn *sshConnection) error {
 	}
 
 	// custom configuration
+	allowedAutoUploadDirs := getExOptionConfig(args, "AllowedAutoUploadDirs")
+	if strings.EqualFold(allowedAutoUploadDirs, "none") {
+		allowedAutoUploadDirs = ""
+	} else if allowedAutoUploadDirs == "" {
+		allowedAutoUploadDirs = userConfig.allowedAutoUploadDirs
+	}
 	defaultUploadPath := getExOptionConfig(args, "DefaultUploadPath")
 	if defaultUploadPath == "" {
 		defaultUploadPath = userConfig.defaultUploadPath
@@ -140,10 +146,27 @@ func setupTrzszFilter(sshConn *sshConnection) error {
 	})
 
 	// setup trzsz config
-	trzszFilter.SetDefaultUploadPath(defaultUploadPath)
-	trzszFilter.SetDefaultDownloadPath(defaultDownloadPath)
+	if err := trzszFilter.SetAllowedAutoUploadDirs(allowedAutoUploadDirs); err != nil {
+		warning("AllowedAutoUploadDirs %q is invalid: %v", allowedAutoUploadDirs, err)
+	}
+	if err := trzszFilter.SetDefaultUploadPath(defaultUploadPath); err != nil {
+		warning("DefaultUploadPath %q is invalid: %v", defaultUploadPath, err)
+	}
+	if err := trzszFilter.SetDefaultDownloadPath(defaultDownloadPath); err != nil {
+		warning("DefaultDownloadPath %q is invalid: %v", defaultDownloadPath, err)
+	}
 	trzszFilter.SetDragFileUploadCommand(dragFileUploadCommand)
 	trzszFilter.SetProgressColorPair(userConfig.progressColorPair)
+
+	if enableZmodem {
+		autoRename := getExOptionConfig(args, "ZmodemAutoRename")
+		if autoRename == "" {
+			autoRename = userConfig.zmodemAutoRename
+		}
+		if autoRename != "" {
+			trzszFilter.SetZmodemAutoRename(*parseBoolValue("ZmodemAutoRename", autoRename, false))
+		}
+	}
 
 	// setup tunnel connect
 	trzszFilter.SetTunnelConnector(func(port int) net.Conn {

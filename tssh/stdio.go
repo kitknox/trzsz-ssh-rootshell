@@ -47,6 +47,9 @@ func writeAll(dst io.Writer, data []byte) error {
 		if err != nil {
 			return err
 		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
 		m += n
 	}
 	return nil
@@ -181,7 +184,7 @@ func getEscapeConfig(args *sshArgs) (byte, time.Duration) {
 
 	escapeChar := byte('~')
 	if escCh := getOptionConfig(args, "EscapeChar"); escCh != "" {
-		if strings.ToLower(escCh) == "none" {
+		if strings.EqualFold(escCh, "none") {
 			consoleEscapeTime = 0
 		} else if len(escCh) == 2 && escCh[0] == '^' {
 			b := escCh[1]

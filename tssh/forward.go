@@ -248,7 +248,7 @@ func parseForwardArg(str string) (*forwardCfg, error) {
 }
 
 func isGatewayPorts(args *sshArgs) bool {
-	return args.Gateway || strings.ToLower(getConfig(args.Destination, "GatewayPorts")) == "yes"
+	return args.Gateway || strings.EqualFold(getOptionConfig(args, "GatewayPorts"), "yes")
 }
 
 func forwardDeniedReason(err error, network string) string {
@@ -325,7 +325,7 @@ func remoteForward(sshConn *sshConnection, f *forwardCfg, gateway bool, timeout 
 func sshPortForward(sshConn *sshConnection) {
 	args := sshConn.param.args
 	// clear all forwardings
-	if strings.ToLower(getOptionConfig(args, "ClearAllForwardings")) == "yes" {
+	if strings.EqualFold(getOptionConfig(args, "ClearAllForwardings"), "yes") {
 		debug("clear all forwardings")
 		return
 	}
@@ -341,14 +341,14 @@ func sshPortForward(sshConn *sshConnection) {
 
 	gateway := isGatewayPorts(sshConn.param.args)
 	timeout := getConnectTimeout(sshConn.param.args)
-	unlinkUnix := strings.ToLower(getOptionConfig(sshConn.param.args, "StreamLocalBindUnlink")) == "yes"
+	unlinkUnix := strings.EqualFold(getOptionConfig(sshConn.param.args, "StreamLocalBindUnlink"), "yes")
 	bindMask := streamLocalBindMask(sshConn.param.args)
 
 	// dynamic forward
 	for _, b := range args.DynamicForward.binds {
 		dynamicForward(sshConn, b, gateway, timeout, unlinkUnix, bindMask)
 	}
-	for _, s := range getAllExOptionConfig(args, "DynamicForward") {
+	for _, s := range getAllExOptionConfig(args, "DynamicForward", false) {
 		b, err := parseBindCfg(s)
 		if err != nil {
 			warning("parse dynamic forwarding failed: %v", err)
@@ -359,13 +359,13 @@ func sshPortForward(sshConn *sshConnection) {
 
 	// local forward
 	for _, f := range args.LocalForward.cfgs {
-		if f.udp && sshConn.param.udpMode == kUdpModeNo {
+		if f.udp && !sshConn.param.udpTransport {
 			warnRequiredUDP()
 			continue
 		}
 		localForward(sshConn, f, gateway, timeout, unlinkUnix, bindMask)
 	}
-	for _, s := range getAllExOptionConfig(args, "LocalForward") {
+	for _, s := range getAllExOptionConfig(args, "LocalForward", false) {
 		f, err := parseForwardCfg(sshConn.param, false, s)
 		if err != nil {
 			warning("parse local forwarding failed: %v", err)
@@ -373,8 +373,8 @@ func sshPortForward(sshConn *sshConnection) {
 		}
 		localForward(sshConn, f, gateway, timeout, unlinkUnix, bindMask)
 	}
-	for _, s := range getAllExOptionConfig(args, "UdpLocalForward") {
-		if sshConn.param.udpMode == kUdpModeNo {
+	for _, s := range getAllExOptionConfig(args, "UdpLocalForward", true) {
+		if !sshConn.param.udpTransport {
 			warnRequiredUDP()
 			break
 		}
@@ -388,13 +388,13 @@ func sshPortForward(sshConn *sshConnection) {
 
 	// remote forward
 	for _, f := range args.RemoteForward.cfgs {
-		if f.udp && sshConn.param.udpMode == kUdpModeNo {
+		if f.udp && !sshConn.param.udpTransport {
 			warnRequiredUDP()
 			continue
 		}
 		remoteForward(sshConn, f, gateway, timeout)
 	}
-	for _, s := range getAllExOptionConfig(args, "RemoteForward") {
+	for _, s := range getAllExOptionConfig(args, "RemoteForward", false) {
 		f, err := parseForwardCfg(sshConn.param, false, s)
 		if err != nil {
 			warning("parse remote forwarding failed: %v", err)
@@ -402,8 +402,8 @@ func sshPortForward(sshConn *sshConnection) {
 		}
 		remoteForward(sshConn, f, gateway, timeout)
 	}
-	for _, s := range getAllExOptionConfig(args, "UdpRemoteForward") {
-		if sshConn.param.udpMode == kUdpModeNo {
+	for _, s := range getAllExOptionConfig(args, "UdpRemoteForward", true) {
+		if !sshConn.param.udpTransport {
 			warnRequiredUDP()
 			break
 		}

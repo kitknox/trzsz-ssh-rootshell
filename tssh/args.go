@@ -77,7 +77,9 @@ type sshArgs struct {
 	X11Forward     bool        `arg:"-X,--" help:"enables X11 forwarding"`
 	NoX11Forward   bool        `arg:"-x,--" help:"disables X11 forwarding"`
 	X11Trusted     bool        `arg:"-Y,--" help:"enables trusted X11 forwarding"`
+	ControlMaster  bool        `arg:"-M,--" help:"enables master mode for multiplexing"`
 	ControlPath    string      `arg:"-S,--" placeholder:"ctl_path" help:"specify the control socket path"`
+	ControlCmd     string      `arg:"-O,--" placeholder:"ctl_cmd" help:"send command to a multiplex master"`
 	Reconnect      bool        `arg:"--reconnect" help:"reconnect or restart after process exits"`
 	DragFile       bool        `arg:"--dragfile" help:"enable drag files and directories to upload"`
 	TraceLog       bool        `arg:"--tracelog" help:"enable trzsz detect trace logs for debugging"`
@@ -85,9 +87,12 @@ type sshArgs struct {
 	Client         bool        `arg:"--client" help:"force trzsz run as a client on the jump server"`
 	Debug          bool        `arg:"--debug" help:"verbose mode for debugging, same as ssh's -vvv"`
 	Zmodem         bool        `arg:"--zmodem" help:"enable zmodem lrzsz ( rz / sz ) feature"`
-	Dns            string      `arg:"--dns" placeholder:"[udp://|tcp://]host[:port]" help:"custom DNS server"`
+	RemoveHostKey  bool        `arg:"--remove-host-key" help:"remove the known_hosts entry before connecting"`
+	DNS            string      `arg:"--dns" placeholder:"[udp://|tcp://]host[:port]" help:"custom DNS server"`
+	TCP            bool        `arg:"--tcp" help:"force standard TCP SSH (overrides UdpMode)"`
 	UDP            bool        `arg:"--udp" help:"ssh over UDP like mosh (default: QUIC)"`
 	KCP            bool        `arg:"--kcp" help:"[udp] use KCP protocol for ssh over UDP"`
+	QUIC           bool        `arg:"--quic" help:"[udp] use QUIC protocol for ssh over UDP"`
 	Attach         bool        `arg:"--attach" help:"[udp] attach to session (implies --udp)"`
 	TsshdPath      string      `arg:"--tsshd-path" placeholder:"path" help:"[udp] tsshd absolute path on the server"`
 	TsshdPort      string      `arg:"--tsshd-port" placeholder:"low-high" help:"[udp] port range that tsshd listens on"`
@@ -104,6 +109,7 @@ type sshArgs struct {
 	UploadFile     multiStr    `arg:"--upload-file" placeholder:"path" help:"[tools] upload the local file to remote server"`
 	DownloadPath   string      `arg:"--download-path" placeholder:"path" help:"[tools] the local saving path for downloading"`
 	originalDest   string
+	canonicalDest  string
 }
 
 func (sshArgs) Description() string {

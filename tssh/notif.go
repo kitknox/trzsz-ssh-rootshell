@@ -103,8 +103,8 @@ func interactWithUserInput(client *sshUdpClient) {
 			case ch == '\x01': // Ctrl+A toggles full notifications.
 				client.notifInterceptor.showFullNotif.Store(!client.notifInterceptor.showFullNotif.Load())
 			case client.notifInterceptor.exitKey != 0 && ch == client.notifInterceptor.exitKey:
-				client.exit(kExitCodeUdpCtrlC, fmt.Sprintf("lost connection and %s keystroke",
-					udpReconnectExitKeyName(client.notifInterceptor.exitKey)))
+				client.sshConn.Load().forceExit(kExitCodeUdpCtrlC,
+					fmt.Sprintf("lost connection and %s keystroke", udpReconnectExitKeyName(client.notifInterceptor.exitKey)))
 				return
 			}
 		case <-time.After(200 * time.Millisecond):
@@ -502,8 +502,8 @@ func setupUdpNotification(sshConn *sshConnection) {
 	}
 
 	ni := notifInterceptor{client: lastJumpUdpClient, interceptChan: make(chan byte, 1)}
-	ni.noticeOnTop = strings.ToLower(getExOptionConfig(sshConn.param.args, "ShowNotificationOnTop")) != "no"
-	ni.showFullNotif.Store(strings.ToLower(getExOptionConfig(sshConn.param.args, "ShowFullNotifications")) != "no")
+	ni.noticeOnTop = !strings.EqualFold(getExOptionConfig(sshConn.param.args, "ShowNotificationOnTop"), "no")
+	ni.showFullNotif.Store(!strings.EqualFold(getExOptionConfig(sshConn.param.args, "ShowFullNotifications"), "no"))
 	ni.exitKey = parseUdpReconnectExitKey(getExOptionConfig(sshConn.param.args, "UdpReconnectExitKey"))
 
 	inReader, inWriter := io.Pipe()

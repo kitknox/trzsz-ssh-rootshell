@@ -171,7 +171,6 @@ func newPassphraseSigner(path string, priKey []byte, err *ssh.PassphraseMissingE
 }
 
 func getSigner(param *sshParam, path string) sshSigner {
-	path = resolveHomeDir(path)
 	privateKey, err := os.ReadFile(path)
 	if err != nil {
 		warning("read private key [%s] failed: %v", path, err)
@@ -259,7 +258,7 @@ func readSecret(prompt string) ([]byte, error) {
 }
 
 func getPasswordAuthMethod(param *sshParam) ssh.AuthMethod {
-	if strings.ToLower(getOptionConfig(param.args, "PasswordAuthentication")) == "no" {
+	if strings.EqualFold(getOptionConfig(param.args, "PasswordAuthentication"), "no") {
 		debug("disable auth method: password authentication")
 		return nil
 	}
@@ -334,7 +333,7 @@ func readQuestionAnswerConfig(param *sshParam, idx int, question string) string 
 }
 
 func getKeyboardInteractiveAuthMethod(param *sshParam) ssh.AuthMethod {
-	if strings.ToLower(getOptionConfig(param.args, "KbdInteractiveAuthentication")) == "no" {
+	if strings.EqualFold(getOptionConfig(param.args, "KbdInteractiveAuthentication"), "no") {
 		debug("disable auth method: keyboard interactive authentication")
 		return nil
 	}
@@ -393,7 +392,7 @@ var getDefaultSigners = func() func() []sshSigner {
 
 func getPublicKeysAuthMethod(param *sshParam) ssh.AuthMethod {
 	args := param.args
-	if v := strings.ToLower(getOptionConfig(args, "PubkeyAuthentication")); v == "no" || v == "false" {
+	if v := getOptionConfig(args, "PubkeyAuthentication"); strings.EqualFold(v, "no") || strings.EqualFold(v, "false") {
 		debug("disable auth method: public key authentication")
 		return nil
 	}
@@ -427,20 +426,24 @@ func getPublicKeysAuthMethod(param *sshParam) ssh.AuthMethod {
 		addPubKeySigners(appendSignerCerts(path, signer, certFiles))
 	}
 
-	identities := args.Identity.values
+	var identities []string
+	for _, identity := range args.Identity.values {
+		identities = append(identities, resolveHomeDir(identity))
+	}
 	for _, identity := range getAllOptionConfig(args, "IdentityFile") {
 		expandedIdentity, err := expandTokens(identity, param, "%CdhijkLlnpru")
 		if err != nil {
 			warning("expand IdentityFile [%s] failed: %v", identity, err)
 			continue
 		}
-		if userConfig.useOpenSSHConfig {
-			expandedIdentity = resolveHomeDir(expandedIdentity)
-			if !isFileExist(expandedIdentity) {
-				debug("IdentityFile [%s] does not exist", expandedIdentity)
-				continue
-			}
+
+		expandedIdentity = resolveHomeDir(expandedIdentity)
+
+		if userConfig.shouldUseOpenSSHConfig() && !isFileExist(expandedIdentity) {
+			debug("IdentityFile [%s] does not exist", expandedIdentity)
+			continue
 		}
+
 		identities = append(identities, expandedIdentity)
 	}
 
@@ -461,11 +464,10 @@ func getPublicKeysAuthMethod(param *sshParam) ssh.AuthMethod {
 				pubPath += ".pub"
 			}
 			if isFileExist(pubPath) {
-				pubPath = resolveHomeDir(pubPath)
 				if pubKey := parsePublicKey(pubPath); pubKey != nil {
 					for _, agentSigner := range agentSigners {
 						if bytes.Equal(pubKey.Marshal(), agentSigner.PublicKey().Marshal()) {
-							addSignerWithCerts("", newSshSigner(pubPath+" (agent)", nil, pubKey, agentSigner))
+							addSignerWithCerts("", newSshSigner(path+" (agent)", nil, pubKey, agentSigner))
 							continue out
 						}
 					}
@@ -485,7 +487,7 @@ func getPublicKeysAuthMethod(param *sshParam) ssh.AuthMethod {
 		}
 	}
 
-	if strings.ToLower(getOptionConfig(args, "IdentitiesOnly")) != "yes" {
+	if !strings.EqualFold(getOptionConfig(args, "IdentitiesOnly"), "yes") {
 		for _, signer := range agentSigners {
 			addSignerWithCerts("", newSshSigner("ssh-agent", nil, signer.PublicKey(), signer))
 		}

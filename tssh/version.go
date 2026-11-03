@@ -33,7 +33,7 @@ import (
 	"strings"
 )
 
-const kTsshVersion = "0.1.25"
+const kTsshVersion = "0.1.27"
 
 // buildTag stores the version tag injected at build time via -ldflags.
 var buildTag = ""
@@ -66,7 +66,7 @@ func getTsshVersion() string {
 			if revision != "" {
 				version.WriteByte('-')
 				version.WriteString(revision[:min(7, len(revision))])
-				if strings.ToLower(modified) == "true" {
+				if strings.EqualFold(modified, "true") {
 					version.WriteString("-m")
 				}
 			}

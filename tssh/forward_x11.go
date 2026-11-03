@@ -34,7 +34,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trzsz/ssh_config"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -47,11 +46,11 @@ type x11Request struct {
 
 func sshX11Forward(sshConn *sshConnection) {
 	args := sshConn.param.args
-	if args.NoX11Forward || !args.X11Forward && !args.X11Trusted && strings.ToLower(getOptionConfig(args, "ForwardX11")) != "yes" {
+	if args.NoX11Forward || !args.X11Forward && !args.X11Trusted && !strings.EqualFold(getOptionConfig(args, "ForwardX11"), "yes") {
 		return
 	}
 
-	if sshConn.param.control && sshConn.param.udpMode == kUdpModeNo {
+	if sshConn.param.controlClient {
 		warning("X11 forwarding is not supported when logging in via a control socket")
 		return
 	}
@@ -73,7 +72,6 @@ func sshX11Forward(sshConn *sshConnection) {
 			return true
 		}
 
-		ssh_config.SetDefault("ForwardX11Trusted", "")
 		switch strings.ToLower(getOptionConfig(args, "ForwardX11Trusted")) {
 		case "yes":
 			return true
@@ -91,7 +89,7 @@ func sshX11Forward(sshConn *sshConnection) {
 
 	timeout := uint32(1200)
 	forwardX11Timeout := getOptionConfig(args, "ForwardX11Timeout")
-	if forwardX11Timeout != "" && strings.ToLower(forwardX11Timeout) != "none" {
+	if forwardX11Timeout != "" && !strings.EqualFold(forwardX11Timeout, "none") {
 		seconds, err := convertSshTime(forwardX11Timeout)
 		if err != nil {
 			warning("ForwardX11Timeout [%s] invalid: %v", forwardX11Timeout, err)
@@ -132,7 +130,7 @@ func sshX11Forward(sshConn *sshConnection) {
 		return
 	}
 
-	if sshConn.param.udpMode == kUdpModeNo {
+	if !sshConn.param.udpTransport {
 		debug("request ssh X11 forwarding success")
 	}
 

@@ -84,6 +84,39 @@ var getHostname = func() string {
 	return hostname
 }
 
+// supportsTokenJ reports whether the local OpenSSH client supports the %j token.
+// If the version cannot be determined, assume support to avoid unnecessarily
+// restricting token expansion.
+func supportsTokenJ() bool {
+	_, majorVersion, minorVersion, err := getOpenSSH()
+	if err != nil || majorVersion < 0 || minorVersion < 0 {
+		return true
+	}
+	if majorVersion > 9 || (majorVersion == 9 && minorVersion >= 6) {
+		return true
+	}
+	return false
+}
+
+// jumpHostOf extracts the host from a proxy jump specification like
+// [user@]host[:port], the same way OpenSSH derives options.jump_host in
+// parse_jump(), so that the %C hash matches OpenSSH exactly.
+func jumpHostOf(spec string) string {
+	if idx := strings.LastIndexByte(spec, '@'); idx >= 0 {
+		spec = spec[idx+1:]
+	}
+	if strings.HasPrefix(spec, "[") { // ipv6 literal, e.g. [::1]:2222
+		if idx := strings.IndexByte(spec, ']'); idx > 0 {
+			return spec[1:idx]
+		}
+		return spec[1:]
+	}
+	if idx := strings.IndexByte(spec, ':'); idx >= 0 {
+		spec = spec[:idx]
+	}
+	return spec
+}
+
 func expandTokens(str string, param *sshParam, tokens string) (string, error) {
 	if !strings.ContainsRune(str, '%') {
 		return str, nil
@@ -137,7 +170,10 @@ func expandTokens(str string, param *sshParam, tokens string) (string, error) {
 			buf.WriteString(hostname)
 		case 'j':
 			if len(param.proxies) > 0 {
-				proxy := param.proxies[len(param.proxies)-1]
+				if !supportsTokenJ() {
+					return "", fmt.Errorf("local OpenSSH client [%s] is too old; %%j is not supported for compatibility", openSshPath)
+				}
+				proxy := jumpHostOf(param.proxies[len(param.proxies)-1])
 				if !isHostValid(proxy) {
 					return "", fmt.Errorf("proxy [%s] contains invalid characters", proxy)
 				}
@@ -145,8 +181,9 @@ func expandTokens(str string, param *sshParam, tokens string) (string, error) {
 			}
 		case 'C':
 			hashStr := fmt.Sprintf("%s%s%s%s", getHostname(), param.host, param.port, param.user)
-			if len(param.proxies) > 0 && strings.ContainsRune(tokens, 'j') {
-				hashStr += param.proxies[len(param.proxies)-1]
+			// OpenSSH 9.6 and later include the jump host in the %C hash.
+			if len(param.proxies) > 0 && supportsTokenJ() {
+				hashStr += jumpHostOf(param.proxies[len(param.proxies)-1])
 			}
 			fmt.Fprintf(&buf, "%x", sha1.Sum([]byte(hashStr)))
 		case 'k':
@@ -169,4 +206,20 @@ func expandTokens(str string, param *sshParam, tokens string) (string, error) {
 		return "", fmt.Errorf("[%s] ends with %% is invalid", str)
 	}
 	return buf.String(), nil
+}
+
+func containsToken(s string, token byte) bool {
+	for i, n := 0, len(s)-1; i < n; i++ {
+		if s[i] != '%' {
+			continue
+		}
+		i++
+		switch s[i] {
+		case '%':
+			// skip %%
+		case token:
+			return true
+		}
+	}
+	return false
 }

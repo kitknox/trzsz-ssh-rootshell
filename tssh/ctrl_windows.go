@@ -25,25 +25,44 @@ SOFTWARE.
 package tssh
 
 import (
+	"fmt"
 	"strings"
 )
 
 const kOpenSSH = "ssh.exe"
 
+func execControlCmd(_ *sshArgs, _ string) int {
+	warning("controlling the multiplexing master process is not supported on Windows")
+	return kExitCodeToolsError
+}
+
+type muxMaster struct{}
+
+func startMuxMaster(_ *sshParam, _ SshClient, _ string) (*muxMaster, error) {
+	return nil, fmt.Errorf("ControlMaster is not supported on Windows")
+}
+
+func waitMuxMasterClients(_ *sshConnection) {}
+
 func connectViaControl(param *sshParam) SshClient {
-	ctrlMaster := getOptionConfig(param.args, "ControlMaster")
 	ctrlPath := param.args.ControlPath
 	if ctrlPath == "" {
 		ctrlPath = getOptionConfig(param.args, "ControlPath")
 	}
 
-	switch strings.ToLower(ctrlMaster) {
-	case "auto", "yes", "ask", "autoask", "true":
+	master := param.args.ControlMaster
+	if !master {
+		ctrlMaster := getOptionConfig(param.args, "ControlMaster")
+		switch strings.ToLower(ctrlMaster) {
+		case "auto", "yes", "ask", "autoask", "true":
+			master = true
+		}
+	}
+	if master {
 		warning("ControlMaster is not supported on Windows")
 	}
 
-	switch strings.ToLower(ctrlPath) {
-	case "", "none":
+	if ctrlPath == "" || strings.EqualFold(ctrlPath, "none") {
 		return nil
 	}
 

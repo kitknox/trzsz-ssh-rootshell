@@ -58,7 +58,7 @@ func getDefaultDetailsTemplate() string {
 	addItem := func(name string) {
 		fmt.Fprintf(&builder, `{{ if hasField . "%s" }}`+
 			`{{- if .%s }}{{ "%s:" | %s }}{{ "\t" }}{{ .%s | %s }}{{ "\n" }}{{ end }}`+
-			`{{ else }}{{ $value := getExConfig .Alias "%s" }}`+
+			`{{ else }}{{ $value := getExConfig .Args "%s" }}`+
 			`{{- if $value }}{{ "%s:" | %s }}{{ "\t" }}{{ $value | %s }}{{ "\n" }}{{ end }}`+
 			`{{ end }}`,
 			name, name, name, getThemeColor("details_name"), name, getThemeColor("details_value"),
@@ -71,8 +71,7 @@ func getDefaultDetailsTemplate() string {
 		case "host":
 			addItem("Host")
 		case "port":
-			fmt.Fprintf(&builder, `{{- if ne .Port "22" }}{{ "Port:" | %s }}{{ "\t" }}{{ .Port | %s }}{{ "\n" }}{{ end }}`,
-				getThemeColor("details_name"), getThemeColor("details_value"))
+			addItem("Port")
 		case "user":
 			addItem("User")
 		case "grouplabels":
@@ -236,9 +235,7 @@ func (t *tableTheme) renderDetails(item any) string {
 		case "host":
 			addItem("Host", host.Host)
 		case "port":
-			if host.Port != "22" {
-				data = append(data, []string{"Port", host.Port})
-			}
+			addItem("Port", host.Port)
 		case "user":
 			addItem("User", host.User)
 		case "grouplabels":
@@ -252,7 +249,7 @@ func (t *tableTheme) renderDetails(item any) string {
 		case "remotecommand":
 			addItem("RemoteCommand", host.RemoteCommand)
 		default:
-			addItem(item, getExConfig(host.Alias, item))
+			addItem(item, getExConfig(host.Args, item))
 		}
 	}
 	tbl := table.New().BorderRow(true).Rows(data...).

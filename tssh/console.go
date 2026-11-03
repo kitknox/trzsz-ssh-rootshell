@@ -37,6 +37,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// In UDP attach mode, the default exit behavior is to detach.
+// Set this to true when the tsshd server needs to exit as well (not just detach).
 var wantExit atomic.Bool
 
 type menuItem struct {
@@ -217,7 +219,7 @@ func runConsole(escapeChar byte, writer io.WriteCloser, sshConn *sshConnection) 
 		return model, tea.Quit
 	}})
 
-	if sshConn.param.args.Attach || strings.ToLower(getExOptionConfig(sshConn.param.args, "UdpSessionAttach")) == "yes" {
+	if sshConn.param.args.Attach || strings.EqualFold(getExOptionConfig(sshConn.param.args, "UdpSessionAttach"), "yes") {
 		model.items = append(model.items, &menuItem{"d", getText("console/detach"), func() (tea.Model, tea.Cmd) {
 			exiting.Store(true)
 			go func() {

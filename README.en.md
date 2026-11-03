@@ -162,7 +162,7 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
   </details>
 
-- Install with Go ( Requires go 1.25 or later )
+- Install with Go ( Requires go 1.26 or later )
 
   <details><summary><code>go install github.com/trzsz/trzsz-ssh/cmd/tssh@latest</code></summary>
 
@@ -178,7 +178,7 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
   </details>
 
-- Build from source ( Requires go 1.25 or later )
+- Build from source ( Requires go 1.26 or later )
 
   <details><summary><code>sudo make install</code></summary>
 
@@ -215,7 +215,7 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
 - Before use, you need to configure `~/.ssh/config` (for Windows, it is `C:\Users\xxx\.ssh\config`, replace `xxx` with your username).
 
-- For how to configure `~/.ssh/config`, please refer to the documentation of [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html). `Match exec` is supported only when `UseOpenSSHConfig` is enabled (see configuration below).
+- For how to configure `~/.ssh/config`, please refer to the documentation of [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html). The built-in parser supports `Match all` and a standalone `Match host`; other criteria, combined criteria, and `Match exec` require `UseOpenSSHConfig` to be enabled (see configuration below).
 
 - Running `tssh` without arguments will open the login prompt. If there are arguments except destination will also open the login prompt.
 
@@ -770,11 +770,18 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
   # The automatically save path for tsz downloading, the default is empty which poping up a folder dialog.
   DefaultDownloadPath = ~/Downloads
 
+  # The directories allowed for automatic upload (without popping up a file selection dialog). You can configure one or multiple paths separated by spaces. If a path contains spaces, wrap the entire path in single or double quotes. The configured paths must be absolute paths or start with `~/`.
+  # ⚠️ Security Warning: Please use this feature with caution. If you log into a malicious server, the server could stealthily steal all files under the configured directories without your confirmation.
+  AllowedAutoUploadDirs = ~/Downloads/ '/Users/username/My Documents/'
+
   # The global drag file upload command, note that the priority configured in ~/.ssh/config is higher.
   DragFileUploadCommand = trz -y
 
   # The trzsz progress bar will gradient from the first color to the second color. Don't include `#`.
   ProgressColorPair = B14FFF 00FFA3
+
+  # Whether to automatically rename files on name conflicts during Zmodem (rz/sz) transfers.
+  ZmodemAutoRename = no
 
   # When searching and selecting servers with tssh, the theme and colors.
   PromptThemeLayout = simple
@@ -793,11 +800,21 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
   PromptCursorIcon = 🧨
   PromptSelectedIcon = 🍺
 
+  # The cursor style of the search input when searching and selecting a server in tssh.
+  # Set to 'pipe' to display a vertical bar (|). The default is a solid block (█):
+  PromptSearchPointer = pipe
+
   # Auto set terminal title after login. It will not be reset after exiting. Please set PROMPT_COMMAND in local shell.
+  # Set this to rtt to display the current connection RTT in the title (e.g. server 12ms).
   SetTerminalTitle = yes
 
   # Use `ssh -G` to evaluate OpenSSH config, including `Match` blocks.
+  # The login prompt evaluates every alias, including commands in `Match exec`.
   UseOpenSSHConfig = yes
+
+  # Enable fuzzy host selection for partially matched destinations.
+  # This option is enabled by default. When enabled, tssh displays a selection menu for possible matching hosts.
+  FuzzyHostSelection = yes
   ```
 
 ### Comments of Config
@@ -909,6 +926,8 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
   - If downloading the `tsshd` installation package fails, you can download and specify it through `--tsshd-bin-path /path/to/tsshd.tar.gz`.
   - Note: `--install-tsshd` does not support Windows server, and does not support jump server (unless using `ProxyJump`).
 
+- If `SetTerminalTitle = rtt` is set in `$XDG_CONFIG_HOME/tssh/tssh.conf` ( or `~/.tssh.conf` ), the terminal title will display the current connection RTT (round-trip time), for example: server 12ms. For non-UDP mode, `ServerAliveInterval` must also be configured for RTT to be displayed.
+
 - About changing the terminal title, it can be achieved without `tssh`. It only needs to be configured in the server's shell configuration file (such as `~/.bashrc`):
 
   ```sh
@@ -933,6 +952,32 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
   Host xxx
     #!! DnsSrvName myhost.mydomain.com
   ```
+
+- Custom DNS Server: `tssh` can use a custom DNS server instead of the system resolver. This is useful when connecting through a VPN, testing internal DNS, or using public DNS services.
+
+  - Configure a default DNS server in `$XDG_CONFIG_HOME/tssh/tssh.conf` (or `~/.tssh.conf`):
+
+    ```
+    CustomDnsServer = 1.1.1.1
+    ```
+
+  - You can also specify it for a single connection:
+
+    ```sh
+    tssh --dns 8.8.8.8 server
+    ```
+
+  - You can also specify a custom port or use DNS over TCP:
+
+    ```
+    CustomDnsServer = tcp://1.1.1.1:5353
+    ```
+
+    ```sh
+    tssh --dns tcp://1.1.1.1:5353 server
+    ```
+
+  - If no port is specified, port `53` is used by default. The `--dns` option overrides `CustomDnsServer`.
 
 ### Reconnect Mode
 
@@ -976,6 +1021,7 @@ Host xxx
     #!! UdpMTU 1400
     #!! UdpSessionAttach no
     #!! UdpSessionName xxx
+    #!! UdpCompression zstd
 ```
 
 - `UdpMode`: `no` (the default: tssh works in TCP mode), `yes` (default protocol: `QUIC`), `QUIC` ([QUIC](https://github.com/quic-go/quic-go) protocol: faster speed), `KCP` ([KCP](https://github.com/xtaci/kcp-go) protocol: lower latency).
@@ -1003,6 +1049,24 @@ Host xxx
 - `UdpSessionAttach`: Defaults to `no`. When set to `yes`, it allows attaching to an existing session on the server. Meanwhile, the current session will also be made attachable, allowing you to re-attach to it later when logging in from other devices or networks.
 
 - `UdpSessionName`: Customizes the session name. This only takes effect when `UdpSessionAttach` is set to `yes` or when logging in with the `--attach` argument. If a session with this name already exists on the server, it will attach directly; if not, a new session with this name will be created for automatic attachment in future logins.
+
+- `UdpCompression`: Set to `zstd` to enable Zstandard compression for UDP session output. Defaults to `zstd` when supported by the server. Set to `none` to disable compression.
+
+### UDP Multiplexing
+
+- In UDP mode, `tssh` itself acts as the `ControlMaster` (OpenSSH is not involved), so later logins reuse the established UDP connection without a new SSH login or a new `tsshd` process:
+
+  ```sh
+  tssh --udp -M -S ~/.ssh/ctl-%C xxx        # the master: logs in normally and listens on the control socket
+  tssh -S ~/.ssh/ctl-%C xxx                 # further sessions, commands, -L / -R / -D forwards reuse the UDP connection
+  tssh -O check -S ~/.ssh/ctl-%C xxx        # check | exit | stop are supported for tssh and OpenSSH masters
+  ```
+
+  Or configure `ControlMaster auto` and `ControlPath` together with `UdpMode` in `~/.ssh/config`: the first `tssh xxx` becomes the master, the following ones are multiplexed automatically.
+
+- When the shell of the master exits while multiplexed clients are still connected, the master keeps running until they exit (press `Ctrl+C` to force exit). `tssh --udp -M -N xxx` keeps a master running without a shell. `ControlPersist` is not supported in UDP mode yet.
+
+- Only `tssh` can connect to a UDP master (mux proxy mode). OpenSSH clients such as `ssh -S`, `scp` and `rsync` (mux passenger mode) are not supported yet. X11 forwarding, agent forwarding, UDP port forwarding and `-R` with port `0` are not supported through the control socket.
 
 ### UDP Port Forwarding
 

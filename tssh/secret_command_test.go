@@ -25,6 +25,8 @@ SOFTWARE.
 package tssh
 
 import (
+	"os/exec"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +35,12 @@ import (
 )
 
 func TestExecSecretCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("echo"); err != nil {
+			t.Skip("echo command is required to run this test")
+		}
+	}
+
 	assert := assert.New(t)
 	oriEnableWarning, oriUserConfig := enableWarningLogging, userConfig
 	enableWarningLogging, userConfig = false, &tsshConfig{}
@@ -49,11 +57,17 @@ func TestExecSecretCommand(t *testing.T) {
 	assert.Equal("", execSecretCommand(param, "/nonexistent/command"))
 	assert.Equal("", execSecretCommand(param, "echo -n ''"))
 
-	result := execSecretCommand(param, "printf 'line1\\nline2'")
+	result := execSecretCommand(param, "echo 'line1\nline2'")
 	assert.Equal("line1\nline2", result)
 }
 
 func TestExecSecretCommandTokens(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("echo"); err != nil {
+			t.Skip("echo command is required to run this test")
+		}
+	}
+
 	assert := assert.New(t)
 	oriEnableWarning, oriUserConfig := enableWarningLogging, userConfig
 	enableWarningLogging, userConfig = false, &tsshConfig{}
@@ -68,13 +82,18 @@ func TestExecSecretCommandTokens(t *testing.T) {
 }
 
 func TestGetSecretConfigWithCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("echo"); err != nil {
+			t.Skip("echo command is required to run this test")
+		}
+	}
+
 	assert := assert.New(t)
 	oriEnableWarning, oriUserConfig := enableWarningLogging, userConfig
 	enableWarningLogging, userConfig = false, &tsshConfig{}
 	defer func() { enableWarningLogging, userConfig = oriEnableWarning, oriUserConfig }()
 
-	var err error
-	userConfig.exConfig, err = ssh_config.DecodeBytes([]byte(`
+	config, err := ssh_config.DecodeBytes([]byte(`
 Host cmdhost
     HostName 10.0.0.1
     User testuser
@@ -95,6 +114,8 @@ Host tokenhost
     PasswordCommand echo password-for-%n
 `))
 	require.NoError(t, err)
+
+	userConfig.exConfig = &sshConfig{"", config}
 
 	param := func(alias string) *sshParam {
 		param, err := getSshParam(&sshArgs{Destination: alias}, false)

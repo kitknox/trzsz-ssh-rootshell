@@ -474,7 +474,7 @@ func (p *sshPrompt) wrapStdin() {
 		_ = p.selector.Stdin.Close()
 	}()
 	buffer := make([]byte, 100)
-	if strings.ToLower(userConfig.promptDefaultMode) == "search" {
+	if strings.EqualFold(userConfig.promptDefaultMode, "search") {
 		p.search = true
 		_, _ = p.pipeOut.Write([]byte{'/'})
 	}
@@ -554,12 +554,12 @@ func matchHost(h *sshHost, keywords []string) bool {
 	return true
 }
 
-func chooseAlias(keywords string) (string, bool, error) {
+func chooseAlias(args *sshArgs, keywords string) (string, bool, error) {
 	if state, _ := makeStdinRaw(); state != nil {
 		defer resetStdin(state)
 	}
 
-	hosts := getAllHosts()
+	hosts := getAllHosts(args)
 
 	searcher := func(input string, index int) bool {
 		return matchHost(hosts[index], strings.Fields(strings.ToLower(input)))
@@ -575,6 +575,11 @@ func chooseAlias(keywords string) (string, bool, error) {
 			v = v.Elem()
 		}
 		return v.FieldByName(field).IsValid()
+	}
+
+	pointer := blinkingBlockCursor
+	if strings.EqualFold(userConfig.promptSearchPointer, "pipe") {
+		pointer = blinkingPipeCursor
 	}
 
 	pipeIn, pipeOut := io.Pipe()
@@ -600,6 +605,7 @@ func chooseAlias(keywords string) (string, bool, error) {
 			Stdout:       &bellFilter{os.Stderr},
 			HideSelected: true,
 			Keywords:     keywords,
+			Pointer:      pointer,
 		},
 		pipeOut: pipeOut,
 		hosts:   hosts,
@@ -631,16 +637,23 @@ func chooseAlias(keywords string) (string, bool, error) {
 	return selectedHosts[0].Alias, false, nil
 }
 
-func predictDestination(dest string) (string, bool, error) {
-	if !isTerminal || strings.ContainsAny(dest, ".:[]@") {
+func blinkingPipeCursor(input []rune) []rune {
+	return append([]rune("\033[5m|\033[0m"), input...)
+}
+
+func blinkingBlockCursor(input []rune) []rune {
+	return []rune("\033[5m\u2588\033[0m")
+}
+
+func predictDestination(args *sshArgs, dest string) (string, bool, error) {
+	if !isTerminal ||
+		userConfig.shouldUseOpenSSHConfig() ||
+		!userConfig.shouldFuzzyHostSelection() ||
+		strings.ContainsAny(dest, ".:[]@") {
 		return dest, false, nil
 	}
 
-	if userConfig.useOpenSSHConfig {
-		return dest, false, nil
-	}
-
-	hosts := getAllHosts()
+	hosts := getAllHosts(args)
 	for _, host := range hosts {
 		if host.Alias == dest {
 			return dest, false, nil
@@ -669,5 +682,20 @@ func predictDestination(dest string) (string, bool, error) {
 		return dest, false, nil
 	}
 
-	return chooseAlias(dest)
+	return chooseAlias(args, dest)
+}
+
+func chooseOrPredictDest(args *sshArgs) (string, bool, error) {
+	if args.ControlCmd != "" && args.ControlPath != "" {
+		return args.Destination, false, nil
+	}
+
+	if args.Destination == "" || args.Destination == "FAKE_DEST_IN_WARP" {
+		if !isTerminal {
+			return "", false, fmt.Errorf("destination is required when running tssh in non-interactive mode")
+		}
+		return chooseAlias(args, "")
+	}
+
+	return predictDestination(args, args.Destination)
 }

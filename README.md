@@ -54,20 +54,20 @@ trzsz-ssh ( tssh ) with [tsshd](https://github.com/trzsz/tsshd) also supports in
 
 trzsz-ssh ( tssh ) works exactly like the openssh client. The following common features have been implemented:
 
-|    Features    |                                                                            Support Options                                                                            |
+|    Features    |                                  <br /> Support Options <br /><img src="https://github.com/fake-image.png" width="800" height="0" />                                  |
 | :------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
 |   Pseudo TTY   |                                                                        `-t` `-T` `RequestTTY`                                                                         |
 |   Algorithms   |                                                                    `-c` `Ciphers` `KexAlgorithms`                                                                     |
 |   SSH Proxy    |                                                                 `-J` `-W` `ProxyJump` `ProxyCommand`                                                                  |
 |    Network     |                                                              `-4` `-6` `AddressFamily` `ConnectTimeout`                                                               |
-|  Multiplexing  |                                                          `-S` `ControlMaster` `ControlPath` `ControlPersist`                                                          |
 |    Command     |                                                       `-s` `RemoteCommand` `LocalCommand` `PermitLocalCommand`                                                        |
-|  Known Hosts   |                                                  `UserKnownHostsFile` `GlobalKnownHostsFile` `StrictHostKeyChecking`                                                  |
+|  Multiplexing  |                                                     `-M` `-S` `-O` `ControlMaster` `ControlPath` `ControlPersist`                                                     |
 |   SSH Agent    |                                               `-a` `-A` `ForwardAgent` `IdentityAgent` `IdentitiesOnly` `SSH_AUTH_SOCK`                                               |
 |  X11 Forward   |                                          `-x` `-X` `-Y` `ForwardX11` `ForwardX11Trusted` `ForwardX11Timeout` `XAuthLocation`                                          |
-|  Canonicalize  |                                      `CanonicalizeHostname` `CanonicalDomains` `CanonicalizeMaxDots` `CanonicalizeFallbackLocal`                                      |
 |  Basic Login   |                                   `-l` `-p` `-i` `-F` `HostName` `Port` `User` `IdentityFile` `CertificateFile` `SendEnv` `SetEnv`                                    |
+|  Canonicalize  |                                      `CanonicalizeHostname` `CanonicalDomains` `CanonicalizeMaxDots` `CanonicalizeFallbackLocal`                                      |
 | Authentication |                                 `PubkeyAuthentication` `PasswordAuthentication` `KbdInteractiveAuthentication` `GSSAPIAuthentication`                                 |
+|  Known Hosts   |                                `UserKnownHostsFile` `GlobalKnownHostsFile` `StrictHostKeyChecking` `VerifyHostKeyDNS` `HashKnownHosts`                                |
 |  Port Forward  | `-g` `-f` `-N` `-n` `-L` `-R` `-D` `LocalForward` `RemoteForward` `DynamicForward` `GatewayPorts` `ClearAllForwardings` `StreamLocalBindUnlink` `StreamLocalBindMask` |
 |     Others     |                                                                             `EscapeChar`                                                                              |
 
@@ -234,7 +234,7 @@ trzsz-ssh ( tssh ) offers additional useful features:
 
   </details>
 
-- Install with Go ( Requires go 1.25 or later )
+- Install with Go ( Requires go 1.26 or later )
 
   <details><summary><code>go install github.com/trzsz/trzsz-ssh/cmd/tssh@latest</code></summary>
 
@@ -250,7 +250,7 @@ trzsz-ssh ( tssh ) offers additional useful features:
 
   </details>
 
-- Build from source ( Requires go 1.25 or later )
+- Build from source ( Requires go 1.26 or later )
 
   <details><summary><code>sudo make install</code></summary>
 

@@ -27,6 +27,7 @@ package tssh
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -105,7 +106,9 @@ func replaceOrAppendDest(args []string, oldDest, newDest string) ([]string, erro
 
 	if oldDest == "" {
 		// No existing destination, append the new one
-		newArgs = append(newArgs, newDest)
+		if newDest != "" {
+			newArgs = append(newArgs, newDest)
+		}
 	} else if oldDest != newDest {
 		// Replace old destination
 		idx := -1
@@ -239,7 +242,11 @@ func addOnCloseFunc(f func()) {
 	onCloseFuncs = append(onCloseFuncs, f)
 }
 
-var isTerminal bool = isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
+func isTerminalFd(fd uintptr) bool {
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+var isTerminal bool = isTerminalFd(os.Stdin.Fd())
 
 // TrzMain is the main function of tssh program.
 func TsshMain(argv []string) int {
@@ -304,19 +311,18 @@ func TsshMain(argv []string) int {
 	// choose ssh alias
 	dest := ""
 	quit := false
-	if args.Destination == "" || args.Destination == "FAKE_DEST_IN_WARP" {
-		if !isTerminal {
-			fmt.Fprintln(os.Stderr, "destination is required when running tssh in non-interactive mode")
-			return kExitCodeNoDestHost
-		}
-		dest, quit, err = chooseAlias("")
-	} else {
-		dest, quit, err = predictDestination(args.Destination)
-	}
+	dest, quit, err = chooseOrPredictDest(&args)
 	if quit {
 		err = nil
-		return 0
+		return kExitCodeCanceled
 	}
+
+	// multiplexing control command
+	if args.ControlCmd != "" {
+		return execControlCmd(&args, dest)
+	}
+
+	// check dest before startup
 	if err != nil || dest == "" {
 		if err == nil {
 			err = fmt.Errorf("missing destination host")
@@ -346,13 +352,14 @@ func TsshMain(argv []string) int {
 	}
 
 	// custom DNS server
-	if args.Dns != "" {
-		setDNS(args.Dns)
+	if args.DNS != "" {
+		setDNS(args.DNS)
+	} else if userConfig.customDnsServer != "" {
+		setDNS(userConfig.customDnsServer)
 	}
 
 	// start ssh program
 	args.Destination = dest
-	args.originalDest = dest
 	var code int
 	code, err = sshStart(&args)
 	return code
@@ -365,6 +372,9 @@ func sshStart(args *sshArgs) (int, error) {
 		return kExitCodeLoginFailed, err
 	}
 	defer func() {
+		// keep the control master alive while multiplexed clients are still connected
+		waitMuxMasterClients(sshConn)
+
 		cleanupOnClose()
 		sshConn.Close()
 	}()
@@ -392,7 +402,7 @@ func sshStart(args *sshArgs) (int, error) {
 	}
 
 	// ssh port forwarding
-	if !sshConn.param.control {
+	if !sshConn.param.controlClient {
 		sshPortForward(sshConn)
 	}
 
@@ -408,7 +418,7 @@ func sshStart(args *sshArgs) (int, error) {
 	}
 
 	// ssh agent forward
-	if !sshConn.param.control {
+	if !sshConn.param.controlClient {
 		sshAgentForward(sshConn)
 	}
 
@@ -416,11 +426,8 @@ func sshStart(args *sshArgs) (int, error) {
 	sshX11Forward(sshConn)
 
 	// set terminal title
-	if userConfig.setTerminalTitle != "" {
-		switch strings.ToLower(userConfig.setTerminalTitle) {
-		case "yes", "true":
-			setTerminalTitle(args.Destination)
-		}
+	if strings.EqualFold(userConfig.setTerminalTitle, "yes") || strings.EqualFold(userConfig.setTerminalTitle, "true") {
+		setTerminalTitle(args.Destination)
 	}
 
 	// execute remote tools if necessary
@@ -451,7 +458,11 @@ func sshStart(args *sshArgs) (int, error) {
 		}
 	} else {
 		if err := sshConn.session.Shell(); err != nil {
-			return kExitCodeShellFailed, fmt.Errorf("start shell failed: %v", err)
+			if !errors.Is(err, io.EOF) {
+				return kExitCodeShellFailed, fmt.Errorf("start shell failed: %v", err)
+			}
+			debug("shell request reached EOF before reply, continuing")
+			sshConn.startEOF = true
 		}
 	}
 
@@ -492,7 +503,7 @@ func sshStart(args *sshArgs) (int, error) {
 }
 
 func execLocalCommand(param *sshParam) {
-	if strings.ToLower(getOptionConfig(param.args, "PermitLocalCommand")) != "yes" {
+	if !strings.EqualFold(getOptionConfig(param.args, "PermitLocalCommand"), "yes") {
 		return
 	}
 	localCmd := getOptionConfig(param.args, "LocalCommand")

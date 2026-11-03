@@ -161,7 +161,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   </details>
 
-- 用 Go 直接安装（ 要求 go 1.25 以上 ）
+- 用 Go 直接安装（ 要求 go 1.26 以上 ）
 
   <details><summary><code>go install github.com/trzsz/trzsz-ssh/cmd/tssh@latest</code></summary>
 
@@ -177,7 +177,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
   </details>
 
-- 用 Go 自己编译（ 要求 go 1.25 以上 ）
+- 用 Go 自己编译（ 要求 go 1.26 以上 ）
 
   <details><summary><code>sudo make install</code></summary>
 
@@ -214,7 +214,7 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
 
 - 使用之前，需要配置好 `~/.ssh/config` ( Windows 是 `C:\Users\xxx\.ssh\config`, `xxx` 换成用户名 )。
 
-- 关于如何配置 `~/.ssh/config`，请参考 [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html) ( `Match` 中的 `exec` 暂时要参考下文配置 `UseOpenSSHConfig` 才支持 )，或参考 tssh wiki [SSH基本配置](https://github.com/trzsz/trzsz-ssh/wiki/SSH%E5%9F%BA%E6%9C%AC%E9%85%8D%E7%BD%AE)。
+- 关于如何配置 `~/.ssh/config`，请参考 [openssh](https://manpages.debian.org/bookworm/openssh-client/ssh_config.5.en.html)，或参考 tssh wiki [SSH基本配置](https://github.com/trzsz/trzsz-ssh/wiki/SSH%E5%9F%BA%E6%9C%AC%E9%85%8D%E7%BD%AE)。内置解析器支持 `Match all` 和单独的 `Match host`；其他条件、组合条件以及 `Match exec` 需要参考下文启用 `UseOpenSSHConfig`。
 
 - 直接无参数运行 `tssh` 命令就会打开登录界面，或者有除目标机器外的其他参数也会打开登录界面。
 
@@ -769,11 +769,18 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   # tsz 下载时，自动保存的路径，为空时弹出对话框手工选择，默认为空
   DefaultDownloadPath = ~/Downloads
 
+  # 配置允许自动上传的目录（无需弹出文件选择框）。你可以配置一个或多个路径，使用空格分隔。如果路径中包含空格，请使用单引号或双引号将整个路径包裹起来。要求配置绝对路径，或者以 `~/` 开头。
+  # ⚠️ 安全风险： 请谨慎配置此功能。如果你登录了恶意的服务器，服务器可能会在不经你确认的情况下，偷偷地将这些配置目录下的所有文件全部偷走。
+  AllowedAutoUploadDirs = ~/Downloads/ '/Users/username/My Documents/'
+
   # 全局的拖拽文件上传命令，注意 ~/.ssh/config 中配置的优先级更高
   DragFileUploadCommand = trz -y
 
   # trzsz 进度条将从第一种颜色渐变到第二种颜色。注意不要带 `#`。
   ProgressColorPair = B14FFF 00FFA3
+
+  # 使用 Zmodem（rz/sz）传输文件遇到同名冲突时是否自动重命名文件。
+  ZmodemAutoRename = no
 
   # tssh 搜索和选择服务器时，配置主题风格和自定义颜色
   PromptThemeLayout = simple
@@ -792,11 +799,20 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   PromptCursorIcon = 🧨
   PromptSelectedIcon = 🍺
 
+  # tssh 搜索和选择服务器时，搜索输入框的光标样式。配置为 pipe 时显示为竖线（|），默认是实心方块（█）：
+  PromptSearchPointer = pipe
+
   # 登录后自动设置终端标题，退出后不会重置，你需要参考下文在本地 shell 中设置 PROMPT_COMMAND
+  # 设置为 rtt 时会在标题中显示当前连接 RTT（例如：server 12ms）。
   SetTerminalTitle = yes
 
   # 使用 `ssh -G` 解析 OpenSSH 配置，包括 `Match` 规则
+  # 登录界面会为每个别名求值；配置中的 `Match exec` 命令也会随之执行
   UseOpenSSHConfig = yes
+
+  # 启用目标主机部分匹配时的模糊选择功能。
+  # 默认情况下此选项开启，当输入的目标主机存在模糊匹配项时，tssh 会显示候选主机选择菜单。
+  FuzzyHostSelection = yes
   ```
 
 ### 配置注释
@@ -907,6 +923,8 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   - 若下载 `tsshd` 的安装包失败，可以自行下载并通过 `--tsshd-bin-path /path/to/tsshd.tar.gz` 参数指定。
   - 注意：`--install-tsshd` 不支持 Windows 服务器，不支持跳板机（ 除非以 `ProxyJump` 跳过 ）。
 
+- 如果在 `$XDG_CONFIG_HOME/tssh/tssh.conf` ( 或 `~/.tssh.conf` ) 中设置了 `SetTerminalTitle = rtt`，则会在终端标题中显示当前连接的 RTT（往返延迟），例如：server 12ms。非 UDP 模式要求设置 `ServerAliveInterval` 才会生效。
+
 - 关于修改终端标题，其实无需 `tssh` 就能实现，只要在服务器的 shell 配置文件中（如`~/.bashrc`）配置：
 
   ```sh
@@ -931,6 +949,32 @@ trzsz-ssh ( tssh ) 与 [tsshd](https://github.com/trzsz/tsshd) 一起，适用�
   Host xxx
     #!! DnsSrvName myhost.mydomain.com
   ```
+
+- 自定义 DNS 服务器，`tssh` 支持使用自定义 DNS 服务器，而不是系统默认解析器。这对于使用 VPN、访问内网 DNS 或测试公共 DNS 服务都很有帮助。
+
+  - 可以在 `$XDG_CONFIG_HOME/tssh/tssh.conf`（或 `~/.tssh.conf`）中配置默认 DNS：
+
+    ```
+    CustomDnsServer = 1.1.1.1
+    ```
+
+  - 也可以仅针对当前连接指定：
+
+    ```sh
+    tssh --dns 8.8.8.8 server
+    ```
+
+  - 也支持指定自定义端口，或通过 TCP 进行 DNS 查询：
+
+    ```
+    CustomDnsServer = tcp://1.1.1.1:5353
+    ```
+
+    ```sh
+    tssh --dns tcp://1.1.1.1:5353 server
+    ```
+
+  - 如果未指定端口，则默认使用 `53`。命令行参数 `--dns` 的优先级高于 `CustomDnsServer`。
 
 ### 重连模式
 
@@ -974,6 +1018,7 @@ Host xxx
     #!! UdpMTU 1400
     #!! UdpSessionAttach no
     #!! UdpSessionName xxx
+    #!! UdpCompression zstd
 ```
 
 - `UdpMode`: `no` (默认为`no`: tssh 工作在 TCP 模式), `yes` (默认协议: `QUIC`), `QUIC` ([QUIC](https://github.com/quic-go/quic-go) 协议：速度更快), `KCP` ([KCP](https://github.com/xtaci/kcp-go) 协议：延迟更低).
@@ -1001,6 +1046,24 @@ Host xxx
 - `UdpSessionAttach`: 默认为 `no`。配置为 `yes` 时，允许附加到服务器上已存在的会话；同时，本次登录的会话也会运行在可附加模式下，支持后续在其他设备或网络下重新登录时附加。
 
 - `UdpSessionName`: 自定义会话名称。仅在 `UdpSessionAttach` 配置为 `yes` 或通过 `--attach` 参数登录时生效。若服务器端已存在该名称的会话，将直接附加；若不存在，则以此名称创建新会话，供后续登录时自动附加。
+
+- `UdpCompression`：设置为 `zstd` 时，启用 UDP 会话输出的 Zstandard 压缩。服务端支持时默认使用 `zstd`。设置为 `none` 可禁用压缩。
+
+### UDP 多路复用
+
+- 在 UDP 模式下，`tssh` 本身充当 `ControlMaster`（不涉及 OpenSSH），因此后续登录会复用已建立的 UDP 连接，无需重新进行 SSH 登录或启动新的 `tsshd` 进程：
+
+  ```sh
+  tssh --udp -M -S ~/.ssh/ctl-%C xxx        # 主连接：正常登录并监听控制套接字
+  tssh -S ~/.ssh/ctl-%C xxx                 # 后续会话、命令、-L / -R / -D 端口转发均可复用此 UDP 连接
+  tssh -O check -S ~/.ssh/ctl-%C xxx        # 支持对 tssh 和 OpenSSH 主连接执行 check、exit、stop
+  ```
+
+  或者在 `~/.ssh/config` 中将 `ControlMaster auto`、`ControlPath` 与 `UdpMode` 配合配置：第一次执行 `tssh xxx` 会自动成为主连接，后续连接将自动进行多路复用。
+
+- 当多路复用客户端仍处于连接状态而主连接的 shell 退出时，主连接将继续运行，直到所有客户端退出（按 `Ctrl+C` 可强制退出）。`tssh --udp -M -N xxx` 可保持主连接在没有 shell 的情况下运行。目前 UDP 模式下尚不支持 `ControlPersist`。
+
+- 目前仅支持 `tssh` 连接到 UDP 主连接（多路复用代理模式）。暂不支持诸如 `ssh -S`、`scp` 和 `rsync` 等 OpenSSH 客户端（多路复用乘客模式）。通过控制套接字暂不支持 X11 转发、Agent 转发、UDP 端口转发以及端口为 `0` 的 `-R` 转发。
 
 ### UDP 端口转发
 

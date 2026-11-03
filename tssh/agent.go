@@ -41,7 +41,7 @@ var (
 
 func getAgentAddr(param *sshParam) (string, error) {
 	if addr := getOptionConfig(param.args, "IdentityAgent"); addr != "" {
-		if strings.ToLower(addr) == "none" {
+		if strings.EqualFold(addr, "none") {
 			return "", nil
 		}
 		expandedAddr, err := expandTokens(addr, param, "%CdhijkLlnpru")
@@ -119,7 +119,7 @@ func forwardAgentRequest(channel ssh.Channel, addr string) {
 
 func sshAgentForward(sshConn *sshConnection) {
 	args := sshConn.param.args
-	if args.NoForwardAgent || !args.ForwardAgent && strings.ToLower(getOptionConfig(args, "ForwardAgent")) != "yes" {
+	if args.NoForwardAgent || !args.ForwardAgent && !strings.EqualFold(getOptionConfig(args, "ForwardAgent"), "yes") {
 		return
 	}
 	addr, err := getAgentAddr(sshConn.param)
@@ -144,7 +144,7 @@ func sshAgentForward(sshConn *sshConnection) {
 		warning("The agent forwarding request was denied. Check [AllowAgentForwarding, DisableForwarding] in [/etc/ssh/sshd_config] on the server.")
 		return
 	}
-	if sshConn.param.udpMode == kUdpModeNo {
+	if !sshConn.param.udpTransport {
 		debug("request ssh agent forwarding success")
 	}
 }

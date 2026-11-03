@@ -66,7 +66,11 @@ func TestSshArgs(t *testing.T) {
 	assertArgsEqual("-X", sshArgs{X11Forward: true})
 	assertArgsEqual("-x", sshArgs{NoX11Forward: true})
 	assertArgsEqual("-Y", sshArgs{X11Trusted: true})
+	assertArgsEqual("-M", sshArgs{ControlMaster: true})
 	assertArgsEqual("-S none", sshArgs{ControlPath: "none"})
+	assertArgsEqual("-O exit host", sshArgs{ControlCmd: "exit", Destination: "host"})
+	assertArgsEqual("-O check host", sshArgs{ControlCmd: "check", Destination: "host"})
+	assertArgsEqual("-Ostop host", sshArgs{ControlCmd: "stop", Destination: "host"})
 
 	assertArgsEqual("-p1022", sshArgs{Port: 1022})
 	assertArgsEqual("-p 2049", sshArgs{Port: 2049})
@@ -92,8 +96,13 @@ func TestSshArgs(t *testing.T) {
 	assertArgsEqual("--debug", sshArgs{Debug: true})
 	assertArgsEqual("--zmodem", sshArgs{Zmodem: true})
 
+	assertArgsEqual("--remove-host-key", sshArgs{RemoveHostKey: true})
+	assertArgsEqual("--dns tcp://127.0.0.1:1053", sshArgs{DNS: "tcp://127.0.0.1:1053"})
+
+	assertArgsEqual("--tcp", sshArgs{TCP: true})
 	assertArgsEqual("--udp", sshArgs{UDP: true})
 	assertArgsEqual("--kcp", sshArgs{KCP: true})
+	assertArgsEqual("--quic", sshArgs{QUIC: true})
 	assertArgsEqual("--attach", sshArgs{Attach: true})
 	assertArgsEqual("--tsshd-path /usr/bin/tsshd", sshArgs{TsshdPath: "/usr/bin/tsshd"})
 	assertArgsEqual("--tsshd-port 10000-11000", sshArgs{TsshdPort: "10000-11000"})
