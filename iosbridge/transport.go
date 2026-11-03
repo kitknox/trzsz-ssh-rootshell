@@ -112,6 +112,10 @@ type TransportConfig struct {
 	// ServerVersion is the tsshd version string
 	ServerVersion string
 
+	// ProtoVer is the server info's ProtoVer; 0 for servers that predate it.
+	// Protocol 2 turns on zstd session output compression.
+	ProtoVer int
+
 	// Mode is the transport mode: "KCP" or "QUIC"
 	Mode string
 
@@ -179,6 +183,7 @@ func (c *TransportConfig) SetQuicCredentials(serverCert, clientCert, clientKey s
 func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 	var raw struct {
 		ServerVer  string `json:"ServerVer"`
+		ProtoVer   int    `json:"ProtoVer"`
 		Port       int    `json:"Port"`
 		Mode       string `json:"Mode"`
 		Pass       string `json:"Pass"`
@@ -206,6 +211,7 @@ func ParseTransportConfig(jsonStr string) (*TransportConfig, error) {
 
 	cfg := NewTransportConfig()
 	cfg.ServerVersion = raw.ServerVer
+	cfg.ProtoVer = raw.ProtoVer
 	cfg.Port = raw.Port
 	cfg.Mode = raw.Mode
 	cfg.KcpPass = raw.Pass
@@ -250,6 +256,7 @@ func (c *TransportConfig) Validate() string {
 func (c *TransportConfig) toServerInfo() *tsshd.ServerInfo {
 	return &tsshd.ServerInfo{
 		ServerVer:  c.ServerVersion,
+		ProtoVer:   c.ProtoVer,
 		Port:       c.Port,
 		Mode:       c.Mode,
 		Pass:       c.KcpPass,
