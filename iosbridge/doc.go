@@ -29,8 +29,8 @@ SOFTWARE.
 // Swift side using Citadel or NIOSSH.
 //
 // Architecture:
-//   1. Swift side: SSH connection via Citadel, spawn tsshd, parse JSON output
-//   2. Go side: KCP/QUIC transport to tsshd using parsed server info
+//  1. Swift side: SSH connection via Citadel, spawn tsshd, parse JSON output
+//  2. Go side: KCP/QUIC transport to tsshd using parsed server info
 //
 // This separation ensures SSH keys never touch the Go layer.
 //

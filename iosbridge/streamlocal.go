@@ -340,4 +340,3 @@ func (t *Transport) closeAllStreamLocal() {
 		_ = conn.Close()
 	}
 }
-

@@ -142,10 +142,10 @@ func TestDiscardMarkerFilter_ECHOCTLExpanded(t *testing.T) {
 	// Index echo: 5E 40, 5E 40, 5E 40, 5E 4C (ECHOCTL expansion)
 	input := []byte("before")
 	input = append(input, 0xFF, 0xC0, 0xC1, 0xFF) // magic
-	input = append(input, 0x5E, 0x40)               // ^@ (ECHOCTL of 0x00)
-	input = append(input, 0x5E, 0x40)               // ^@ (ECHOCTL of 0x00)
-	input = append(input, 0x5E, 0x40)               // ^@ (ECHOCTL of 0x00)
-	input = append(input, 0x5E, 0x4C)               // ^L (ECHOCTL of 0x0C)
+	input = append(input, 0x5E, 0x40)             // ^@ (ECHOCTL of 0x00)
+	input = append(input, 0x5E, 0x40)             // ^@ (ECHOCTL of 0x00)
+	input = append(input, 0x5E, 0x40)             // ^@ (ECHOCTL of 0x00)
+	input = append(input, 0x5E, 0x4C)             // ^L (ECHOCTL of 0x0C)
 	input = append(input, []byte("after")...)
 	result := f.filter(input)
 	expected := []byte("beforeafter")
@@ -163,7 +163,7 @@ func TestDiscardMarkerFilter_MixedECHOCTL(t *testing.T) {
 	input = append(input, 0x5E, 0x40) // ^@
 	input = append(input, 0x5E, 0x40) // ^@
 	input = append(input, 0x5E, 0x40) // ^@
-	input = append(input, 0x42)        // raw 'B'
+	input = append(input, 0x42)       // raw 'B'
 	input = append(input, []byte("tail")...)
 	result := f.filter(input)
 	if !bytes.Equal(result, []byte("tail")) {
