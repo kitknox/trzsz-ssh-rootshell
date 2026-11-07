@@ -66,7 +66,9 @@ type TailscaleCallback interface {
 type tailscaleConfigJSON struct {
 	Hostname     string `json:"hostname,omitempty"`
 	AcceptRoutes bool   `json:"acceptRoutes,omitempty"`
-	StateDir     string `json:"stateDir,omitempty"` // scratch directory, no secrets
+	ControlURL   string `json:"controlURL,omitempty"` // coordination server; empty is Tailscale's
+	AuthKey      string `json:"authKey,omitempty"`    // registers a new node without the login page
+	StateDir     string `json:"stateDir,omitempty"`   // scratch directory, no secrets
 	// "tssh": SSH rules apply now; the tsshd egress attaches later
 	// (TailscaleAttachTSSH). SSH egress uses socks5Address instead.
 	Egress string `json:"egress,omitempty"`
@@ -74,12 +76,13 @@ type tailscaleConfigJSON struct {
 
 // tailscaleStateJSON is what OnTailscaleState delivers.
 type tailscaleStateJSON struct {
-	State     string                `json:"state"`
-	AuthURL   string                `json:"authURL,omitempty"`
-	Error     string                `json:"error,omitempty"`
-	SelfName  string                `json:"selfName,omitempty"`
-	Addresses []string              `json:"addresses,omitempty"`
-	Settings  tunnelNetworkSettings `json:"settings"`
+	State      string                `json:"state"`
+	AuthURL    string                `json:"authURL,omitempty"`
+	Error      string                `json:"error,omitempty"`
+	Registered bool                  `json:"registered,omitempty"`
+	SelfName   string                `json:"selfName,omitempty"`
+	Addresses  []string              `json:"addresses,omitempty"`
+	Settings   tunnelNetworkSettings `json:"settings"`
 }
 
 // tailnetEngine is the running Tailscale backend.

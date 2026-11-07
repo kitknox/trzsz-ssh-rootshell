@@ -43,6 +43,7 @@ import (
 	"github.com/tailscale/wireguard-go/tun"
 	"tailscale.com/control/controlclient"
 	"tailscale.com/envknob"
+	"tailscale.com/health"
 	"tailscale.com/hostinfo"
 	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnauth"
@@ -52,6 +53,7 @@ import (
 	"tailscale.com/net/netmon"
 	"tailscale.com/net/tsdial"
 	"tailscale.com/tailcfg"
+	"tailscale.com/tsconst"
 	"tailscale.com/tsd"
 	"tailscale.com/types/logger"
 	"tailscale.com/types/logid"
@@ -86,8 +88,14 @@ type Prefs struct {
 // Config starts an Engine. A nil Tun runs userspace netstack mode: no OS
 // routes or DNS, and Dialer reaches the tailnet through netstack.
 type Config struct {
-	Logf     logger.Logf
-	Prefs    Prefs
+	Logf  logger.Logf
+	Prefs Prefs
+	// ControlURL is the coordination server, such as Headscale; empty means
+	// Tailscale's. Read only at start.
+	ControlURL string
+	// AuthKey registers a new node without the login page; a node that is
+	// already signed in ignores it.
+	AuthKey  string
 	StateDir string // scratch directory, no secrets
 	Store    StateStore
 	Tun      tun.Device
@@ -262,12 +270,26 @@ func Start(conf Config) (_ *Engine, reterr error) {
 		return nil, fmt.Errorf("netstack start: %w", err)
 	}
 
+	// A login belongs to its server; another server signs in as a new node.
+	if p := lb.CurrentProfile(); p.ID() != "" && !sameControlServer(p.ControlURL(), conf.ControlURL) {
+		logf("control server changed; dropping profile %s", p.ID())
+		if err := lb.DeleteProfile(p.ID()); err != nil {
+			return nil, fmt.Errorf("drop profile: %w", err)
+		}
+	}
+
 	prefs := ipn.NewPrefs()
+	prefs.ControlURL = conf.ControlURL
 	prefs.Hostname = conf.Prefs.Hostname
 	prefs.WantRunning = true
 	prefs.RouteAll = conf.Prefs.AcceptRoutes
 	prefs.CorpDNS = true
-	if err := lb.Start(ipn.Options{UpdatePrefs: prefs}); err != nil {
+	opts := ipn.Options{UpdatePrefs: prefs}
+	// Only a new node sends the key: a one-time key is spent after it.
+	if lb.CurrentProfile().ID() == "" {
+		opts.AuthKey = conf.AuthKey
+	}
+	if err := lb.Start(opts); err != nil {
 		return nil, fmt.Errorf("backend start: %w", err)
 	}
 	// Start keeps stored prefs; re-apply the ones the user controls.
@@ -287,6 +309,23 @@ func Start(conf Config) (_ *Engine, reterr error) {
 	}
 	return e, nil
 }
+
+// sameControlServer compares control URLs, treating empty and Tailscale's
+// synonyms as the default.
+func sameControlServer(a, b string) bool {
+	norm := func(u string) string {
+		u = strings.TrimRight(u, "/")
+		if u == "" || ipn.IsLoginServerSynonym(u) {
+			return ipn.DefaultControlURL
+		}
+		return u
+	}
+	return norm(a) == norm(b)
+}
+
+// Registered reports whether the server accepted this node (it holds a node
+// key), even before it can reach peers.
+func (e *Engine) Registered() bool { return e.LB.StatusWithoutPeers().HaveNodeKey }
 
 // Context ends when the engine closes.
 func (e *Engine) Context() context.Context { return e.ctx }
@@ -414,9 +453,12 @@ type Peer struct {
 
 // Status is the JSON both Swift sides decode as TailnetStatus.
 type Status struct {
-	State          string `json:"state"`
-	AuthURL        string `json:"authURL,omitempty"`
-	Error          string `json:"error,omitempty"`
+	State   string `json:"state"`
+	AuthURL string `json:"authURL,omitempty"`
+	Error   string `json:"error,omitempty"`
+	// Registered means the server accepted this node, even if it can't reach
+	// peers yet.
+	Registered     bool   `json:"registered,omitempty"`
 	Tailnet        string `json:"tailnet,omitempty"`
 	MagicDNSSuffix string `json:"magicDNSSuffix,omitempty"`
 	Self           *Peer  `json:"self,omitempty"`
@@ -446,8 +488,11 @@ func toPeer(ps *ipnstate.PeerStatus, online bool) Peer {
 func (e *Engine) Status() Status {
 	st := e.LB.Status()
 	e.mu.Lock()
-	out := Status{State: st.BackendState, AuthURL: e.authURL, Error: e.lastErr}
+	out := Status{State: st.BackendState, AuthURL: e.authURL, Error: e.lastErr, Registered: st.HaveNodeKey}
 	e.mu.Unlock()
+	if out.Error == "" && out.State != ipn.Running.String() {
+		out.Error = e.loginError()
+	}
 	out.StateVersion = e.stateVersion.Load()
 	if t := st.CurrentTailnet; t != nil {
 		out.Tailnet = t.Name
@@ -478,6 +523,16 @@ func (e *Engine) Status() Status {
 		out.Peers = out.Peers[:maxStatusPeers]
 	}
 	return out
+}
+
+// loginError is the last failed login attempt, such as a refused auth key or
+// an unreachable server. Tailscale only notifies errors the server words itself.
+func (e *Engine) loginError() string {
+	w, ok := e.LB.HealthTracker().CurrentState().Warnings[tsconst.HealthWarnableLoginState]
+	if !ok {
+		return ""
+	}
+	return w.Args[health.ArgError]
 }
 
 // Ping sends a disco ping, which says whether the path is direct or DERP.

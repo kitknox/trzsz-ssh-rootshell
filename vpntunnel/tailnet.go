@@ -100,14 +100,16 @@ func startTailnetEngine(path *tailnetPath, conf tailscaleConfigJSON, store Tails
 	}()
 
 	_, err := tsengine.Start(tsengine.Config{
-		Logf:     logf,
-		Prefs:    tsengine.Prefs{Hostname: conf.Hostname, AcceptRoutes: conf.AcceptRoutes},
-		StateDir: conf.StateDir,
-		Store:    store,
-		Tun:      e.tun,
-		Router:   &tsRouter{e: e},
-		DNS:      &tsDNS{e: e},
-		OnChange: e.wake,
+		Logf:       logf,
+		Prefs:      tsengine.Prefs{Hostname: conf.Hostname, AcceptRoutes: conf.AcceptRoutes},
+		ControlURL: conf.ControlURL,
+		AuthKey:    conf.AuthKey,
+		StateDir:   conf.StateDir,
+		Store:      store,
+		Tun:        e.tun,
+		Router:     &tsRouter{e: e},
+		DNS:        &tsDNS{e: e},
+		OnChange:   e.wake,
 		Started: func(core *tsengine.Engine) {
 			activeNetMon.Store(core.NetMon)
 			dnsManager := core.DNSManager
@@ -154,7 +156,7 @@ func (e *tsEngine) emitLoop() {
 
 func (e *tsEngine) stateJSON() string {
 	state, authURL, lastErr := e.core.State()
-	s := tailscaleStateJSON{State: state.String(), AuthURL: authURL, Error: lastErr}
+	s := tailscaleStateJSON{State: state.String(), AuthURL: authURL, Error: lastErr, Registered: e.core.Registered()}
 	e.mu.Lock()
 	if rc := e.routerCfg; rc != nil {
 		for _, a := range rc.LocalAddrs {

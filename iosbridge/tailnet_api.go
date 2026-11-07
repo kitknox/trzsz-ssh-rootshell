@@ -85,7 +85,9 @@ func tailnetLogf(format string, a ...any) {
 // tailnetConfig is TailnetStart's JSON.
 type tailnetConfig struct {
 	tailnetPrefs
-	StateDir string `json:"stateDir,omitempty"` // scratch directory, no secrets
+	ControlURL string `json:"controlURL,omitempty"` // coordination server; empty is Tailscale's
+	AuthKey    string `json:"authKey,omitempty"`    // registers a new node without the login page
+	StateDir   string `json:"stateDir,omitempty"`   // scratch directory, no secrets
 }
 
 type tailnetPrefs struct {
@@ -139,7 +141,7 @@ func currentTailnetBackend() tailnetBackend {
 func TailnetSupported() bool { return tailnetBuilt }
 
 // TailnetStart starts the in-app engine. configJSON holds hostname,
-// acceptRoutes, exitNodeID, exitNodeAllowLAN and stateDir.
+// acceptRoutes, exitNodeID, exitNodeAllowLAN, controlURL, authKey and stateDir.
 func TailnetStart(configJSON string, store TailnetStateStore, callback TailnetCallback) error {
 	if !tailnetBuilt {
 		return errTailnetNotBuilt

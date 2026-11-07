@@ -100,11 +100,13 @@ func startTailnetBackend(conf tailnetConfig, store TailnetStateStore, cb Tailnet
 	t := &inAppTailnet{cb: cb, kick: make(chan struct{}, 1)}
 	t.ctx, t.stop = context.WithCancel(context.Background())
 	core, err := tsengine.Start(tsengine.Config{
-		Logf:     tailnetLogf,
-		Prefs:    toEnginePrefs(conf.tailnetPrefs),
-		StateDir: conf.StateDir,
-		Store:    store,
-		OnChange: t.wake,
+		Logf:       tailnetLogf,
+		Prefs:      toEnginePrefs(conf.tailnetPrefs),
+		ControlURL: conf.ControlURL,
+		AuthKey:    conf.AuthKey,
+		StateDir:   conf.StateDir,
+		Store:      store,
+		OnChange:   t.wake,
 	})
 	if err != nil {
 		t.stop()
