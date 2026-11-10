@@ -204,6 +204,61 @@ func (s *syncTime) since() time.Duration {
 type fixedPeerConn struct {
 	net.PacketConn
 	peer *net.UDPAddr
+
+	closeOnce sync.Once
+	onClose   func()
+}
+
+func (c *fixedPeerConn) Close() error {
+	err := c.PacketConn.Close()
+	c.closeOnce.Do(func() {
+		if c.onClose != nil {
+			c.onClose()
+		}
+	})
+	return err
+}
+
+// udpBindings tracks the ports bound for media flows. A datagram bridge cannot
+// see Swift close its end, so a rebind of the same port and peer (a reconnect)
+// evicts the stale listener instead of failing with the port in use.
+type udpBindings struct {
+	mu    sync.Mutex
+	conns map[udpBindingKey]*fixedPeerConn
+}
+
+type udpBindingKey struct {
+	local netip.AddrPort
+	peer  netip.AddrPort
+}
+
+// evict closes the conn holding key, reporting whether one existed.
+func (b *udpBindings) evict(key udpBindingKey) bool {
+	b.mu.Lock()
+	c := b.conns[key]
+	delete(b.conns, key)
+	b.mu.Unlock()
+	if c == nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+func (b *udpBindings) add(key udpBindingKey, c *fixedPeerConn) {
+	b.mu.Lock()
+	if b.conns == nil {
+		b.conns = make(map[udpBindingKey]*fixedPeerConn)
+	}
+	b.conns[key] = c
+	b.mu.Unlock()
+	c.onClose = func() {
+		b.mu.Lock()
+		if b.conns[key] == c {
+			delete(b.conns, key)
+		}
+		b.mu.Unlock()
+	}
 }
 
 func (c *fixedPeerConn) Read(b []byte) (int, error) {

@@ -85,6 +85,7 @@ type inAppTailnet struct {
 	lastEmit string
 
 	traffic tailnetTraffic
+	udp     udpBindings
 }
 
 func toEnginePrefs(p tailnetPrefs) tsengine.Prefs {
@@ -332,11 +333,21 @@ func (t *inAppTailnet) openUDP(ctx context.Context, dst netip.AddrPort, localPor
 	if !self.IsValid() {
 		return nil, fmt.Errorf("no tailnet address for %s", network)
 	}
-	pc, err := t.core.Netstack.ListenPacket(network, netip.AddrPortFrom(self, localPort).String())
+	local := netip.AddrPortFrom(self, localPort)
+	key := udpBindingKey{local: local, peer: unmapped(dst)}
+	evicted := t.udp.evict(key)
+	pc, err := t.core.Netstack.ListenPacket(network, local.String())
+	for attempt := 0; err != nil && evicted && attempt < 5; attempt++ {
+		// Give the evicted endpoint a moment to release its port.
+		time.Sleep(20 * time.Millisecond)
+		pc, err = t.core.Netstack.ListenPacket(network, local.String())
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &fixedPeerConn{PacketConn: pc, peer: net.UDPAddrFromAddrPort(dst)}, nil
+	c := &fixedPeerConn{PacketConn: pc, peer: net.UDPAddrFromAddrPort(dst)}
+	t.udp.add(key, c)
+	return c, nil
 }
 
 func (t *inAppTailnet) ping(ctx context.Context, ip netip.Addr) (tailnetPingResult, error) {

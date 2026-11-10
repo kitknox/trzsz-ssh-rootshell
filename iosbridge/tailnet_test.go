@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -241,6 +242,43 @@ func TestFixedPeerConnFiltersOtherSenders(t *testing.T) {
 	n, err := c.Read(buf)
 	if err != nil || string(buf[:n]) != "kept" {
 		t.Fatalf("read %q %v, want kept", buf[:n], err)
+	}
+}
+
+func TestUDPBindingsEvictStaleListenerForSamePeer(t *testing.T) {
+	listen := func() *net.UDPConn {
+		c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	var b udpBindings
+	stalePC, otherPC := listen(), listen()
+	defer otherPC.Close()
+	peer := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5901}
+	stale := &fixedPeerConn{PacketConn: stalePC, peer: peer}
+	key := udpBindingKey{local: stalePC.LocalAddr().(*net.UDPAddr).AddrPort(), peer: peer.AddrPort()}
+	b.add(key, stale)
+	other := &fixedPeerConn{PacketConn: otherPC, peer: peer}
+	otherKey := udpBindingKey{local: otherPC.LocalAddr().(*net.UDPAddr).AddrPort(), peer: peer.AddrPort()}
+	b.add(otherKey, other)
+
+	if !b.evict(key) {
+		t.Fatal("stale binding was not found")
+	}
+	_ = stalePC.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := stale.Read(make([]byte, 8)); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("stale read error %v, want closed", err)
+	}
+	if b.evict(key) {
+		t.Fatal("evicted binding is still registered")
+	}
+
+	// A conn that closes on its own unregisters, so a later bind is not evicted.
+	_ = other.Close()
+	if b.evict(otherKey) {
+		t.Fatal("self-closed binding is still registered")
 	}
 }
 
