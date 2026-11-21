@@ -41,7 +41,16 @@ import (
 type tailnetProxy struct {
 	ln    net.Listener
 	creds socks5Credentials
-	wg    sync.WaitGroup
+	done  chan struct{} // closed when serve stops accepting
+}
+
+func (p *tailnetProxy) stopped() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
 }
 
 var (
@@ -66,11 +75,17 @@ func randomToken() (string, error) {
 // TailnetProxyStart starts (or returns the running) SOCKS5 proxy on
 // 127.0.0.1 and returns {port,user,pass} JSON. Tailnet hosts go over
 // Tailscale (an exit node, when set, takes everything else); other hosts
-// are dialed directly.
+// are dialed directly. A proxy whose listener failed is replaced on a new
+// port: iOS reclaims a suspended app's listening sockets.
 func TailnetProxyStart() (string, error) {
 	tailnetProxyMu.Lock()
 	defer tailnetProxyMu.Unlock()
 	p := tailnetProxyCur
+	if p != nil && p.stopped() {
+		_ = p.ln.Close()
+		p = nil
+		tailnetProxyCur = nil
+	}
 	if p == nil {
 		user, err := randomToken()
 		if err != nil {
@@ -84,8 +99,7 @@ func TailnetProxyStart() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		p = &tailnetProxy{ln: ln, creds: socks5Credentials{user: user, pass: pass}}
-		p.wg.Add(1)
+		p = &tailnetProxy{ln: ln, creds: socks5Credentials{user: user, pass: pass}, done: make(chan struct{})}
 		go p.serve()
 		tailnetProxyCur = p
 	}
@@ -105,12 +119,12 @@ func TailnetProxyStop() {
 	tailnetProxyMu.Unlock()
 	if p != nil {
 		_ = p.ln.Close()
-		p.wg.Wait()
+		<-p.done
 	}
 }
 
 func (p *tailnetProxy) serve() {
-	defer p.wg.Done()
+	defer close(p.done)
 	for {
 		conn, err := p.ln.Accept()
 		if err != nil {

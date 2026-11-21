@@ -344,6 +344,47 @@ func TestTailnetProxyDialsDirectWithoutEngine(t *testing.T) {
 	}
 }
 
+func TestTailnetProxyRebindsAfterListenerFails(t *testing.T) {
+	first, err := TailnetProxyStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer TailnetProxyStop()
+	// Stands in for iOS reclaiming the listener while the app is suspended.
+	tailnetProxyMu.Lock()
+	dead := tailnetProxyCur
+	tailnetProxyMu.Unlock()
+	_ = dead.ln.Close()
+	select {
+	case <-dead.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+
+	second, err := TailnetProxyStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatal("start returned the dead proxy")
+	}
+	var info tailnetProxyInfo
+	if err := json.Unmarshal([]byte(second), &info); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(info.Port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = c.Write([]byte{0x05, 0x01, 0x02})
+	b := make([]byte, 2)
+	if _, err := io.ReadFull(c, b); err != nil || b[1] != 0x02 {
+		t.Fatalf("method reply %v %v", b, err)
+	}
+}
+
 func TestTailnetCallsWithoutEngine(t *testing.T) {
 	if got := TailnetResolve("100.64.0.1"); got != "" {
 		t.Fatalf("resolve without engine = %q", got)
