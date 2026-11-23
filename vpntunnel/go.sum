@@ -141,8 +141,8 @@ github.com/jsimonetti/rtnetlink v1.4.2 h1:Df9w9TZ3npHTyDn0Ev9e1uzmN2odmXd0QX+J5G
 github.com/jsimonetti/rtnetlink v1.4.2/go.mod h1:92s6LJdE+1iOrw+F2/RO7LYI2Qd8pPpFNNUYW06gcoM=
 github.com/kamstrup/intmap v0.5.2 h1:qnwBm1mh4XAnW9W9Ue9tZtTff8pS6+s6iKF6JRIV2Dk=
 github.com/kamstrup/intmap v0.5.2/go.mod h1:gWUVWHKzWj8xpJVFf5GC0O26bWmv3GqdnIX/LMT6Aq4=
-github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742 h1:prr9nMHYcfngmTlWaGEhErLcG91rdY8An4EDTK2c/ZI=
-github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742/go.mod h1:FCQkf9l3A4yA3R0SDW2leL9eAuTEasSlJfb68lU48BM=
+github.com/kitknox/tsshd-rootshell v0.0.0-20261123001659-269df07a4810 h1:yf7akHPS9ATax1G4od+XuvVBJxxDQ1SlkjV+kjvYR3g=
+github.com/kitknox/tsshd-rootshell v0.0.0-20261123001659-269df07a4810/go.mod h1:FCQkf9l3A4yA3R0SDW2leL9eAuTEasSlJfb68lU48BM=
 github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/klauspost/cpuid/v2 v2.4.1 h1:I9KxadAkvo+QjtcEE2f2tyfEvmIla/T0m+14PrZNl0U=

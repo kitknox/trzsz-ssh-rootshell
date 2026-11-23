@@ -11,7 +11,7 @@ require (
 	tailscale.com v1.104.7
 )
 
-replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261123001659-269df07a4810
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect

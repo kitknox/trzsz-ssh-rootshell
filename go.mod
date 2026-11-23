@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/charmbracelet/colorprofile v0.4.3
@@ -30,7 +30,7 @@ require (
 	github.com/trzsz/ssh_config v1.3.10
 	github.com/trzsz/trzsz-go v1.2.1-0.20261024075151-75236ad0789f
 	github.com/trzsz/trzsz-ssh/vpntunnel v0.0.0
-	github.com/trzsz/tsshd v0.1.11-0.20261031085943-cc599b2bf6e6
+	github.com/trzsz/tsshd v0.1.11-0.20261107172916-8ae6c63b02a1
 	golang.org/x/crypto v0.58.0
 	golang.org/x/mobile v0.0.0-20260204172633-1dceadbbeea3
 	golang.org/x/net v0.62.0
@@ -77,7 +77,7 @@ require (
 	github.com/josephspurrier/goversioninfo v1.7.0 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
 	github.com/klauspost/reedsolomon v1.14.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mdlayher/netlink v1.11.2 // indirect
@@ -102,7 +102,7 @@ require (
 	github.com/trzsz/quic-go v0.63.0 // indirect
 	github.com/trzsz/smux v1.6.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	github.com/xo/terminfo v1.2.0 // indirect
+	github.com/xo/terminfo v1.3.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
@@ -117,6 +117,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
 )
 
-replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261103182532-7f6f6a27f742
+replace github.com/trzsz/tsshd => github.com/kitknox/tsshd-rootshell v0.0.0-20261123001659-269df07a4810
 
 replace github.com/trzsz/trzsz-ssh/vpntunnel => ./vpntunnel
