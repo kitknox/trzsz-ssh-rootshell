@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build TrzszSSH and VPNTunnel together and expose them as an ignored local
-# Swift package. Publishing uses the same artifacts after a clean remote-mode
+# Build TrzszSSH, VPNTunnel and TsshKit together and expose them as an ignored
+# local Swift package. Publishing uses the same artifacts after a clean remote-mode
 # rebuild.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +49,7 @@ fi
 
 "$SCRIPT_DIR/build-tssh-framework.sh" "${COMMON_ARGS[@]}"
 "$SCRIPT_DIR/build-vpntunnel-framework.sh" "${COMMON_ARGS[@]}"
+"$SCRIPT_DIR/build-tsshkit-framework.sh" "${COMMON_ARGS[@]}"
 
 trzsz_revision="$(git -C "$TRZSZ_SSH_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 if [[ "$DEPENDENCY_MODE" == "local" ]]; then
@@ -63,6 +64,7 @@ import hashlib, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 h = hashlib.sha256()
 paths = [root / 'go.mod', root / 'go.sum', root / 'vpntunnel/go.mod', root / 'vpntunnel/go.sum']
+paths.append(root / 'scripts/_app-tailscale/mem_ios.go')
 paths += list((root / 'iosbridge').glob('*.go')) + list((root / 'vpntunnel').glob('*.go'))
 for path in sorted(paths):
     h.update(str(path.relative_to(root)).encode())
@@ -78,6 +80,7 @@ rm -rf "$ARTIFACT_DIR"
 mkdir -p "$ARTIFACT_DIR"
 ditto "$OUTPUT_DIR/TrzszSSH.xcframework" "$ARTIFACT_DIR/TrzszSSH.xcframework"
 ditto "$OUTPUT_DIR/VPNTunnel.xcframework" "$ARTIFACT_DIR/VPNTunnel.xcframework"
+ditto "$OUTPUT_DIR/TsshKit.xcframework" "$ARTIFACT_DIR/TsshKit.xcframework"
 
 cat > "$PACKAGE_DIR/Package.swift" <<EOF
 // swift-tools-version: 5.9
@@ -94,10 +97,12 @@ let package = Package(
     products: [
         .library(name: "TrzszSSH", targets: ["TrzszSSH"]),
         .library(name: "VPNTunnel", targets: ["VPNTunnel"]),
+        .library(name: "TsshKit", targets: ["TsshKit"]),
     ],
     targets: [
         .binaryTarget(name: "TrzszSSH", path: "Artifacts/$build_id/TrzszSSH.xcframework"),
         .binaryTarget(name: "VPNTunnel", path: "Artifacts/$build_id/VPNTunnel.xcframework"),
+        .binaryTarget(name: "TsshKit", path: "Artifacts/$build_id/TsshKit.xcframework"),
     ]
 )
 EOF
@@ -116,4 +121,4 @@ cat > "$PACKAGE_DIR/provenance.json" <<EOF
 EOF
 
 swift package --package-path "$PACKAGE_DIR" dump-package >/dev/null
-echo "Local TrzszSSH/VPNTunnel package ready: $PACKAGE_DIR"
+echo "Local TrzszSSH/VPNTunnel/TsshKit package ready: $PACKAGE_DIR"

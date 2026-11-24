@@ -73,24 +73,30 @@ LOCAL_PACKAGE="$PACKAGE_DIR/.build/local-package"
 [[ -f "$LOCAL_PACKAGE/Package.swift" ]] || { echo "ERROR: local package was not built" >&2; exit 1; }
 TRZSZ_RELATIVE="$(sed -n 's/.*path: "\(Artifacts\/[^\"]*\/TrzszSSH\.xcframework\)".*/\1/p' "$LOCAL_PACKAGE/Package.swift")"
 VPN_RELATIVE="$(sed -n 's/.*path: "\(Artifacts\/[^\"]*\/VPNTunnel\.xcframework\)".*/\1/p' "$LOCAL_PACKAGE/Package.swift")"
+TSSHKIT_RELATIVE="$(sed -n 's/.*path: "\(Artifacts\/[^\"]*\/TsshKit\.xcframework\)".*/\1/p' "$LOCAL_PACKAGE/Package.swift")"
 TRZSZ_XCF="$LOCAL_PACKAGE/$TRZSZ_RELATIVE"
 VPN_XCF="$LOCAL_PACKAGE/$VPN_RELATIVE"
-[[ -d "$TRZSZ_XCF" && -d "$VPN_XCF" ]] || { echo "ERROR: local package artifacts are incomplete" >&2; exit 1; }
+TSSHKIT_XCF="$LOCAL_PACKAGE/$TSSHKIT_RELATIVE"
+[[ -d "$TRZSZ_XCF" && -d "$VPN_XCF" && -d "$TSSHKIT_XCF" ]] || { echo "ERROR: local package artifacts are incomplete" >&2; exit 1; }
 
 rm -rf "$STAGE/artifacts"
 mkdir -p "$STAGE/artifacts"
 ditto "$TRZSZ_XCF" "$STAGE/artifacts/TrzszSSH.xcframework"
 ditto "$VPN_XCF" "$STAGE/artifacts/VPNTunnel.xcframework"
+ditto "$TSSHKIT_XCF" "$STAGE/artifacts/TsshKit.xcframework"
 find "$STAGE/artifacts" -name .DS_Store -delete
 find "$STAGE/artifacts" -exec touch -h -t 202001010000 {} +
 
 TRZSZ_ZIP="$STAGE/TrzszSSH.xcframework.zip"
 VPN_ZIP="$STAGE/VPNTunnel.xcframework.zip"
-rm -f "$TRZSZ_ZIP" "$VPN_ZIP"
+TSSHKIT_ZIP="$STAGE/TsshKit.xcframework.zip"
+rm -f "$TRZSZ_ZIP" "$VPN_ZIP" "$TSSHKIT_ZIP"
 COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGE/artifacts/TrzszSSH.xcframework" "$TRZSZ_ZIP"
 COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGE/artifacts/VPNTunnel.xcframework" "$VPN_ZIP"
+COPYFILE_DISABLE=1 ditto -c -k --keepParent "$STAGE/artifacts/TsshKit.xcframework" "$TSSHKIT_ZIP"
 TRZSZ_CHECKSUM="$(swift package compute-checksum "$TRZSZ_ZIP")"
 VPN_CHECKSUM="$(swift package compute-checksum "$VPN_ZIP")"
+TSSHKIT_CHECKSUM="$(swift package compute-checksum "$TSSHKIT_ZIP")"
 
 cat > "$STAGE/Package.swift" <<EOF
 // swift-tools-version: 5.9
@@ -107,6 +113,7 @@ let package = Package(
     products: [
         .library(name: "TrzszSSH", targets: ["TrzszSSH"]),
         .library(name: "VPNTunnel", targets: ["VPNTunnel"]),
+        .library(name: "TsshKit", targets: ["TsshKit"]),
     ],
     targets: [
         .binaryTarget(
@@ -119,6 +126,11 @@ let package = Package(
             url: "https://github.com/$REPOSITORY/releases/download/$TAG/VPNTunnel.xcframework.zip",
             checksum: "$VPN_CHECKSUM"
         ),
+        .binaryTarget(
+            name: "TsshKit",
+            url: "https://github.com/$REPOSITORY/releases/download/$TAG/TsshKit.xcframework.zip",
+            checksum: "$TSSHKIT_CHECKSUM"
+        ),
     ]
 )
 EOF
@@ -129,6 +141,7 @@ swift package --package-path "$STAGE" dump-package >/dev/null
 echo "Prepared Swift package $VERSION"
 echo "  TrzszSSH: $TRZSZ_CHECKSUM"
 echo "  VPNTunnel: $VPN_CHECKSUM"
+echo "  TsshKit: $TSSHKIT_CHECKSUM"
 echo "  Candidate: $STAGE/Package.swift"
 
 if [[ "$PUBLISH" == false ]]; then
@@ -157,9 +170,9 @@ EOF
 
 if ! gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
     gh release create "$TAG" --repo "$REPOSITORY" --draft --target "$BRANCH" \
-        --title "TrzszSSH and VPNTunnel $VERSION" --notes-file "$STAGE/release-notes.md"
+        --title "TrzszSSH, VPNTunnel and TsshKit $VERSION" --notes-file "$STAGE/release-notes.md"
 fi
-gh release upload "$TAG" "$TRZSZ_ZIP" "$VPN_ZIP" "$STAGE/provenance.json" \
+gh release upload "$TAG" "$TRZSZ_ZIP" "$VPN_ZIP" "$TSSHKIT_ZIP" "$STAGE/provenance.json" \
     --repo "$REPOSITORY" --clobber
 
 cp "$STAGE/Package.swift" "$PACKAGE_DIR/Package.swift"
